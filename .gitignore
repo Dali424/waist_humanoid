@@ -1,0 +1,22 @@
+# Top-level ignores for the aggregated repo
+
+# Common IDE / env noise
+.vscode/
+.idea/
+.DS_Store
+__pycache__/
+*.py[cod]
+*.swp
+.env
+.venv
+env/
+venv/
+
+# Large local data to keep out of GitHub
+unitree_IL_lerobot/datasets/
+unitree_IL_lerobot/eval_data/
+unitree_IL_lerobot/unitree_lerobot/lerobot/outputs/
+unitree_sim_isaaclab/assets/
+unitree_sim_isaaclab/data/
+xr_teleoperate/teleop/data/
+xr_teleoperate/teleop/utils/data/
