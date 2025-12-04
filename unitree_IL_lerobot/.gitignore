@@ -1,0 +1,17 @@
+.vscode
+.ruff_cache
+__pycache__/
+figure.png
+unitree_sdk2_python/
+unitree_lerobot.egg-info
+
+cam_high.jpg
+cam_right_wrist.jpg
+cam_left_wrist.jpg
+data/
+./data
+
+# Large local datasets (do not sync to git)
+datasets/
+eval_data/
+unitree_lerobot/lerobot/outputs/

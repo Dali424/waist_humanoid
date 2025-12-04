@@ -12,6 +12,12 @@ __pycache__/
 env/
 venv/
 
+# Nested git backups (from flattening sub-repos)
+.git.bak/
+**/.git.bak/
+.gitmodules.bak
+**/.gitmodules.bak
+
 # Large local data to keep out of GitHub
 unitree_IL_lerobot/datasets/
 unitree_IL_lerobot/eval_data/
