@@ -77,6 +77,9 @@ def eval_policy(
         attention_dir = os.path.join(cfg.task_dir, getattr(cfg, "attention_dir", "attention"))
         os.makedirs(attention_dir, exist_ok=True)
 
+        def _sanitize_attn_name(name: str) -> str:
+            return name.replace("/", "-").replace(".", "-")
+
         def make_hook(name):
             def hook(module, inp, output):
                 # MultiheadAttention returns (attn_out, attn_weights)
@@ -99,14 +102,96 @@ def eval_policy(
                     cam_dir = os.path.join(attention_dir, cam.replace(".", "-"))
                     os.makedirs(cam_dir, exist_ok=True)
                     cam_dirs[cam] = cam_dir
-                tokens_per_cam = next(iter(cam_grids.values()))
-                tokens_per_cam = tokens_per_cam[0] * tokens_per_cam[1]
-                if policy.config.robot_state_feature:
-                    non_image_tokens += 1
-                if policy.config.env_state_feature:
-                    non_image_tokens += 1
+            tokens_per_cam = next(iter(cam_grids.values()))
+            tokens_per_cam = tokens_per_cam[0] * tokens_per_cam[1]
+            if policy.config.robot_state_feature:
+                non_image_tokens += 1
+            if policy.config.env_state_feature:
+                non_image_tokens += 1
         except Exception as e:
             logger_mp.warning(f"Failed to derive camera token layout for attention viz: {e}")
+            cam_keys = []
+
+    def _attn_vec_from_tensor(attn_tensor: torch.Tensor):
+        if attn_tensor is None:
+            return None
+        if attn_tensor.dim() == 3:
+            attn_map = attn_tensor[:, 0, :]
+        elif attn_tensor.dim() == 2:
+            attn_map = attn_tensor
+        else:
+            return None
+        try:
+            return attn_map.mean(dim=0)
+        except Exception:
+            return None
+
+    def _save_attention_for_cams(
+        attn_name: str,
+        attn_tensor: torch.Tensor,
+        step_idx: int,
+        ep_num_str: str,
+        episode_dir: str | None = None,
+    ):
+        # Episode-rooted attention directory: <episode_dir>/attention/<cam>/<layer>/
+        attn_name_clean = _sanitize_attn_name(attn_name)
+        if episode_dir:
+            ep_root = os.path.join(episode_dir, "attention")
+        else:
+            # Fallback to legacy root if no episode directory is available.
+            ep_root = os.path.join(attention_dir, f"ep{ep_num_str}")
+        os.makedirs(ep_root, exist_ok=True)
+
+        local_layer_dirs: dict[str, str] = {}
+        for cam in cam_keys:
+            cam_dir = os.path.join(ep_root, cam.replace(".", "-"))
+            layer_dir = os.path.join(cam_dir, attn_name_clean)
+            os.makedirs(layer_dir, exist_ok=True)
+            local_layer_dirs[cam] = layer_dir
+
+        attn_vec = _attn_vec_from_tensor(attn_tensor)
+        if attn_vec is None:
+            return
+        if tokens_per_cam is None or not cam_keys:
+            return
+        ep_num_raw = reward_stats.get("episode_num", 0)
+        if isinstance(ep_num_raw, (int, float)):
+            ep_num_str = f"{int(ep_num_raw):04d}"
+        else:
+            ep_num_str = str(ep_num_raw)
+        for cam_idx, cam in enumerate(cam_keys):
+            start = non_image_tokens + cam_idx * tokens_per_cam
+            end = start + tokens_per_cam
+            if end > attn_vec.numel():
+                continue
+            gh, gw = cam_grids.get(cam, (None, None))
+            if gh is None or gw is None:
+                continue
+            cam_attn = attn_vec[start:end].reshape(gh, gw)
+            cam_attn = cam_attn - cam_attn.min()
+            if cam_attn.max() > 0:
+                cam_attn = cam_attn / cam_attn.max()
+            img_t = observation.get(cam)
+            if img_t is None:
+                continue
+            if img_t.ndim == 3 and img_t.shape[0] in (1, 3, 4):
+                img_np = img_t.permute(1, 2, 0).cpu().numpy()
+            else:
+                img_np = img_t.cpu().numpy()
+            if img_np.dtype != np.uint8:
+                img_np = np.clip(img_np, 0, 255).astype(np.uint8)
+            scale_y = max(1, img_np.shape[0] // gh)
+            scale_x = max(1, img_np.shape[1] // gw)
+            up = np.kron(cam_attn, np.ones((scale_y, scale_x)))
+            up = up[: img_np.shape[0], : img_np.shape[1]]
+            plt.figure(figsize=(4, 3))
+            plt.imshow(img_np)
+            plt.imshow(up, cmap="jet", alpha=0.4)
+            plt.axis("off")
+            fname = os.path.join(local_layer_dirs.get(cam, attention_dir), f"step{step_idx:06d}.png")
+            plt.tight_layout()
+            plt.savefig(fname, dpi=150)
+            plt.close()
 
     image_info = None
     try:
@@ -343,56 +428,48 @@ def eval_policy(
                     and tokens_per_cam
                     and idx % max(1, cfg.attention_interval) == 0
                 ):
-                    # Prefer decoder->encoder cross-attn map
-                    key = next((k for k in attn_cache.keys() if "multihead_attn" in k), next(iter(attn_cache)))
-                    attn = attn_cache[key]
-                    if attn.dim() == 3:
-                        # PyTorch MultiheadAttention returns (tgt, batch, src)
-                        attn_map = attn[:, 0, :]
+                    # Prefer decoder->encoder cross-attn for legacy behavior.
+                    ep_num_raw = reward_stats.get("episode_num", 0)
+                    if isinstance(ep_num_raw, (int, float)):
+                        ep_num_str = f"{int(ep_num_raw):04d}"
                     else:
-                        attn_map = attn  # assume (tgt, src)
-                    attn_vec = attn_map.mean(dim=0)  # average over decoder queries -> (src,)
-                    for cam_idx, cam in enumerate(cam_keys):
-                        start = non_image_tokens + cam_idx * tokens_per_cam
-                        end = start + tokens_per_cam
-                        if end > attn_vec.numel():
-                            continue
-                        gh, gw = cam_grids.get(cam, (None, None))
-                        if gh is None or gw is None:
-                            continue
-                        cam_attn = attn_vec[start:end].reshape(gh, gw)
-                        cam_attn = cam_attn - cam_attn.min()
-                        if cam_attn.max() > 0:
-                            cam_attn = cam_attn / cam_attn.max()
-                        img_t = observation.get(cam)
-                        if img_t is None:
-                            continue
-                        if img_t.ndim == 3 and img_t.shape[0] in (1, 3, 4):
-                            img_np = img_t.permute(1, 2, 0).cpu().numpy()
-                        else:
-                            img_np = img_t.cpu().numpy()
-                        if img_np.dtype != np.uint8:
-                            img_np = np.clip(img_np, 0, 255).astype(np.uint8)
-                        scale_y = max(1, img_np.shape[0] // gh)
-                        scale_x = max(1, img_np.shape[1] // gw)
-                        up = np.kron(cam_attn, np.ones((scale_y, scale_x)))
-                        up = up[: img_np.shape[0], : img_np.shape[1]]
-                        plt.figure(figsize=(4, 3))
-                        plt.imshow(img_np)
-                        plt.imshow(up, cmap="jet", alpha=0.4)
-                        plt.axis("off")
-                        ep_num_raw = reward_stats.get("episode_num", 0)
-                        if isinstance(ep_num_raw, (int, float)):
-                            ep_num_str = f"{int(ep_num_raw):04d}"
-                        else:
-                            ep_num_str = str(ep_num_raw)
-                        fname = os.path.join(
-                            cam_dirs.get(cam, attention_dir),
-                            f"ep{ep_num_str}_step{idx}.png",
+                        ep_num_str = str(ep_num_raw)
+
+                    cross_key = next((k for k in attn_cache.keys() if "multihead_attn" in k), None)
+                    episode_dir_for_attn = getattr(episode_writer, "episode_dir", None) if cfg.save_data else None
+                    if cross_key:
+                        _save_attention_for_cams(
+                            cross_key,
+                            attn_cache[cross_key],
+                            step_idx=idx,
+                            ep_num_str=ep_num_str,
+                            episode_dir=episode_dir_for_attn,
                         )
-                        plt.tight_layout()
-                        plt.savefig(fname, dpi=150)
-                        plt.close()
+                    # Also dump encoder (self-attn) layers per layer into subfolders.
+                    for attn_name, attn_tensor in attn_cache.items():
+                        if attn_name == cross_key:
+                            continue
+                        if "self_attn" in attn_name or "encoder" in attn_name:
+                            _save_attention_for_cams(
+                                attn_name,
+                                attn_tensor,
+                                step_idx=idx,
+                                ep_num_str=ep_num_str,
+                                episode_dir=episode_dir_for_attn,
+                            )
+                    # Optionally dump any remaining attention tensors into their own subdirs.
+                    for attn_name, attn_tensor in attn_cache.items():
+                        if attn_name == cross_key:
+                            continue
+                        if "self_attn" in attn_name or "encoder" in attn_name:
+                            continue
+                        _save_attention_for_cams(
+                            attn_name,
+                            attn_tensor,
+                            step_idx=idx,
+                            ep_num_str=ep_num_str,
+                            episode_dir=episode_dir_for_attn,
+                        )
                     attn_cache.clear()
                 idx += 1
                 try:
