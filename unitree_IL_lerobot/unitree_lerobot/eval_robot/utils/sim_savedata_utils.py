@@ -17,6 +17,24 @@ logging_mp.basic_config(level=logging_mp.INFO)
 logger_mp = logging_mp.get_logger(__name__)
 
 
+def flatten_actions(actions: dict) -> list[float]:
+    """Flatten structured actions dict into [left_arm7, right_arm7, left_ee6, right_ee6, body3]."""
+
+    def _slice(key: str, size: int):
+        vals = actions.get(key, {}).get("qpos", [])
+        vals = list(vals)[:size]
+        if len(vals) < size:
+            vals += [0.0] * (size - len(vals))
+        return vals
+
+    left_arm = _slice("left_arm", 7)
+    right_arm = _slice("right_arm", 7)
+    left_ee = _slice("left_ee", 6)
+    right_ee = _slice("right_ee", 6)
+    body = _slice("body", 3)
+    return left_arm + right_arm + left_ee + right_ee + body
+
+
 def process_data_add(
     episode_writer,
     observation_image,
@@ -91,14 +109,15 @@ def process_data_add(
             },
             "body": {"qpos": (current_waist_q.tolist() if (current_waist_q is not None and waist_dof > 0) else [])},
         }
+        arm_action = action[:arm_dof]  # only keep arm joints for arm split
         actions = {
             "left_arm": {
-                "qpos": action[: arm_dof // 2].tolist(),
+                "qpos": arm_action[: arm_dof // 2].tolist(),
                 "qvel": [],
                 "torque": [],
             },
             "right_arm": {
-                "qpos": action[arm_dof // 2 :].tolist(),
+                "qpos": arm_action[arm_dof // 2 : arm_dof].tolist(),
                 "qvel": [],
                 "torque": [],
             },
