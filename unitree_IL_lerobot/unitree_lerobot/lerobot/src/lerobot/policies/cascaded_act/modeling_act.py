@@ -528,10 +528,17 @@ class ACT(nn.Module):
 
         # Arm decoder conditioned on waist
         arm_memory = torch.cat([encoder_out, waist_tokens], dim=0)
+        arm_pos = torch.cat(
+            [
+                encoder_in_pos_embed.expand(-1, waist_tokens.shape[1], -1),
+                torch.zeros_like(waist_tokens),
+            ],
+            dim=0,
+        )
         arm_latent = self.arm_decoder(
             decoder_queries,
             arm_memory,
-            encoder_pos_embed=None,
+            encoder_pos_embed=arm_pos,
             decoder_pos_embed=decoder_pos,
         ).transpose(0, 1)
         pred_arms = self.arm_head(arm_latent)  # (B,S,14)
@@ -539,10 +546,18 @@ class ACT(nn.Module):
 
         # EE decoder conditioned on waist+arm
         ee_memory = torch.cat([encoder_out, waist_tokens, arm_tokens], dim=0)
+        ee_pos = torch.cat(
+            [
+                encoder_in_pos_embed.expand(-1, waist_tokens.shape[1], -1),
+                torch.zeros_like(waist_tokens),
+                torch.zeros_like(arm_tokens),
+            ],
+            dim=0,
+        )
         ee_latent = self.ee_decoder(
             decoder_queries,
             ee_memory,
-            encoder_pos_embed=None,
+            encoder_pos_embed=ee_pos,
             decoder_pos_embed=decoder_pos,
         ).transpose(0, 1)
         pred_ee = self.ee_head(ee_latent)  # (B,S,12)

@@ -6,15 +6,12 @@ REPO_IDS=(
 )
 
 for REPO in "${REPO_IDS[@]}"; do
-  echo "============================================"
-  echo "Training CACT policy on dataset (GPU3): ${REPO}"
-  echo "============================================"
 
   CUDA_VISIBLE_DEVICES=0 python src/lerobot/scripts/train.py \
     --dataset.repo_id="${REPO}" \
     --policy.push_to_hub=false \
-    --wandb.enable=true \
     --policy.type=cascaded_act \
-    --output_dir=outputs/train/cact \
-    --steps=500000
+    --output_dir=outputs/decoder_layer_7/cact \
+    --steps=300000 \
+    --dataset.video_backend=pyav
 done
