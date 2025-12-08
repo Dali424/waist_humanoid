@@ -26,7 +26,6 @@ from lerobot.envs.configs import EnvConfig
 from lerobot.envs.utils import env_to_policy_features
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.cascaded_act.configuration_act import CascadedACTConfig
-from lerobot.policies.cascaded_act_armonly.configuration_act import CascadedACTArmOnlyConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
 from lerobot.policies.pi0fast.configuration_pi0fast import PI0FASTConfig
@@ -54,10 +53,6 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         return ACTPolicy
     elif name == "cascaded_act":
         from lerobot.policies.cascaded_act.modeling_act import ACTPolicy
-
-        return ACTPolicy
-    elif name == "cascaded_act_armonly":
-        from lerobot.policies.cascaded_act_armonly.modeling_act import ACTPolicy
 
         return ACTPolicy
     elif name == "vqbet":
