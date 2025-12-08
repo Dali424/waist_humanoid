@@ -15,3 +15,6 @@ data/
 datasets/
 eval_data/
 unitree_lerobot/lerobot/outputs/
+
+# Keep code datasets package tracked
+!unitree_lerobot/lerobot/src/lerobot/datasets/

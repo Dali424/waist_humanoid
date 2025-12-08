@@ -11,9 +11,9 @@ for REPO in "${REPO_IDS[@]}"; do
     --dataset.repo_id="${REPO}" \
     --policy.push_to_hub=false \
     --policy.type=act \
-    --output_dir=outputs/decoder_layer_7/act \
+    --output_dir=outputs/decoder_layer_7/act_50 \
     --steps=300000 \
-    --policy.type=cascaded_act \
-    --policy.type=cascaded_act 
+    --policy.chunk_size=50 \
+    --policy.n_action_steps=50
 
 done
