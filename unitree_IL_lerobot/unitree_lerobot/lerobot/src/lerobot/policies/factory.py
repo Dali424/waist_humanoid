@@ -27,6 +27,7 @@ from lerobot.envs.utils import env_to_policy_features
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.act_samdoo.configuration_act import ACTSamdooConfig
 from lerobot.policies.cascaded_act.configuration_act import CascadedACTConfig
+from lerobot.policies.cascaded_act_dual.configuration_act import CascadedACTDualConfig
 from lerobot.policies.cascaded_act_interleave.configuration_act import CascadedACTInterleaveConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
@@ -63,6 +64,10 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         return ACTPolicy
     elif name == "cascaded_act_interleave":
         from lerobot.policies.cascaded_act_interleave.modeling_act import ACTPolicy
+
+        return ACTPolicy
+    elif name == "cascaded_act_dual":
+        from lerobot.policies.cascaded_act_dual.modeling_act import ACTPolicy
 
         return ACTPolicy
     elif name == "vqbet":
@@ -106,6 +111,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return CascadedACTConfig(**kwargs)
     elif policy_type == "cascaded_act_interleave":
         return CascadedACTInterleaveConfig(**kwargs)
+    elif policy_type == "cascaded_act_dual":
+        return CascadedACTDualConfig(**kwargs)
     elif policy_type == "cascaded_act_armonly":
         return CascadedACTArmOnlyConfig(**kwargs)
     elif policy_type == "vqbet":
