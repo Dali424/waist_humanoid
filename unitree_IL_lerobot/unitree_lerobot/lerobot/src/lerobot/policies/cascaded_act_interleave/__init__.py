@@ -1,2 +1,0 @@
-"""Interleaved cascaded ACT policy."""
-

@@ -20,9 +20,9 @@ from lerobot.configs.types import NormalizationMode
 from lerobot.optim.optimizers import AdamWConfig
 
 
-@PreTrainedConfig.register_subclass("cascaded_act_interleave")
+@PreTrainedConfig.register_subclass("act_hier_dual")
 @dataclass
-class CascadedACTInterleaveConfig(PreTrainedConfig):
+class ACTHierDualConfig(PreTrainedConfig):
     """Configuration class for the Action Chunking Transformers policy.
 
     Defaults are configured for training on bimanual Aloha tasks like "insertion" or "transfer".
@@ -94,6 +94,13 @@ class CascadedACTInterleaveConfig(PreTrainedConfig):
     n_obs_steps: int = 1
     chunk_size: int = 100
     n_action_steps: int = 100
+    # Separate heads (waist, arm, hand) for DETR-style decoding.
+    waist_dim: int | None = 3
+    arm_dim: int | None = 14
+    hand_dim: int | None = 12
+    waist_indices: list[int] | None = field(default_factory=lambda: [26, 27, 28])
+    arm_indices: list[int] | None = field(default_factory=lambda: list(range(0, 14)))
+    hand_indices: list[int] | None = field(default_factory=lambda: list(range(14, 26)))
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -137,18 +144,6 @@ class CascadedACTInterleaveConfig(PreTrainedConfig):
     optimizer_weight_decay: float = 1e-4
     optimizer_lr_backbone: float = 1e-5
 
-    # Cascaded loss weights
-    alpha_waist: float = 1.0
-    beta_arm: float = 1.0
-    gamma_ee: float = 1.0
-    # Token normalization
-    norm_waist_tokens: bool = False
-    # Decoder ordering: False = waist first then arm, True = arm first then waist
-    arm_first: bool = False
-    # Hybrid cross-attention for second decoder
-    arm_cross_switch_layer: int | None = None
-    arm_cross_use_encoder_first: bool = True
-
     def __post_init__(self):
         super().__post_init__()
 
@@ -171,14 +166,8 @@ class CascadedACTInterleaveConfig(PreTrainedConfig):
             raise ValueError(
                 f"Multiple observation steps not handled yet. Got `nobs_steps={self.n_obs_steps}`"
             )
-        if self.arm_cross_switch_layer is None:
-            self.arm_cross_switch_layer = self.n_decoder_layers // 2
-        self.arm_cross_switch_layer = int(self.arm_cross_switch_layer)
-        if not (0 <= self.arm_cross_switch_layer <= self.n_decoder_layers):
-            raise ValueError(
-                f"`arm_cross_switch_layer` must be in [0, n_decoder_layers]; "
-                f"got {self.arm_cross_switch_layer} with n_decoder_layers={self.n_decoder_layers}"
-            )
+        # Head dimensions depend on the parsed action feature; defer until features are available.
+        self._maybe_init_head_dims()
 
     def get_optimizer_preset(self) -> AdamWConfig:
         return AdamWConfig(
@@ -192,6 +181,7 @@ class CascadedACTInterleaveConfig(PreTrainedConfig):
     def validate_features(self) -> None:
         if not self.image_features and not self.env_state_feature:
             raise ValueError("You must provide at least one image or the environment state among the inputs.")
+        self._maybe_init_head_dims()
 
     @property
     def observation_delta_indices(self) -> None:
@@ -204,3 +194,50 @@ class CascadedACTInterleaveConfig(PreTrainedConfig):
     @property
     def reward_delta_indices(self) -> None:
         return None
+
+    def _maybe_init_head_dims(self) -> None:
+        if not self.output_features:
+            return
+        action_feature = self.action_feature
+        if action_feature is None:
+            raise ValueError("`action` output feature is required for ACTHierDualConfig.")
+        action_dim = action_feature.shape[0]
+        # Handle explicit indices first (they also define the dims).
+        if any(x is not None for x in (self.waist_indices, self.arm_indices, self.hand_indices)):
+            if None in (self.waist_indices, self.arm_indices, self.hand_indices):
+                raise ValueError("waist_indices, arm_indices, and hand_indices must all be provided together.")
+            all_indices = self.waist_indices + self.arm_indices + self.hand_indices
+            if len(all_indices) != len(set(all_indices)):
+                raise ValueError("Head indices must be non-overlapping.")
+            if min(all_indices) < 0 or max(all_indices) >= action_dim:
+                raise ValueError("Head indices must lie within the action dimension.")
+            self.waist_dim, self.arm_dim, self.hand_dim = (
+                len(self.waist_indices),
+                len(self.arm_indices),
+                len(self.hand_indices),
+            )
+        # Otherwise, allow user overrides; if absent split the action dimension evenly across heads.
+        if None in (self.waist_dim, self.arm_dim, self.hand_dim):
+            base = action_dim // 3
+            remainder = action_dim - base * 3
+            splits = [base, base, base]
+            for i in range(remainder):
+                splits[i] += 1
+            self.waist_dim, self.arm_dim, self.hand_dim = splits
+        if self.waist_dim is None or self.arm_dim is None or self.hand_dim is None:
+            raise ValueError("Head dimensions must be set.")
+        if self.waist_dim <= 0 or self.arm_dim <= 0 or self.hand_dim <= 0:
+            raise ValueError("Head dimensions must all be positive.")
+        if self.waist_dim + self.arm_dim + self.hand_dim != action_dim:
+            raise ValueError(
+                f"Sum of head dimensions ({self.waist_dim + self.arm_dim + self.hand_dim}) "
+                f"must equal action dimension ({action_dim})."
+            )
+        # Derive default contiguous indices if none were provided.
+        if self.waist_indices is None:
+            start = 0
+            self.waist_indices = list(range(start, start + self.waist_dim))
+            start += self.waist_dim
+            self.arm_indices = list(range(start, start + self.arm_dim))
+            start += self.arm_dim
+            self.hand_indices = list(range(start, start + self.hand_dim))

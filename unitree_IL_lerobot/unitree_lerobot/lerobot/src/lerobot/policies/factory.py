@@ -26,6 +26,8 @@ from lerobot.envs.configs import EnvConfig
 from lerobot.envs.utils import env_to_policy_features
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.act_samdoo.configuration_act import ACTSamdooConfig
+from lerobot.policies.act_hier.configuration_act import ACTHierConfig
+from lerobot.policies.act_hier_dual.configuration_act import ACTHierDualConfig
 from lerobot.policies.cascaded_act.configuration_act import CascadedACTConfig
 from lerobot.policies.cascaded_act_dual.configuration_act import CascadedACTDualConfig
 from lerobot.policies.cascaded_act_interleave.configuration_act import CascadedACTInterleaveConfig
@@ -62,6 +64,14 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.cascaded_act.modeling_act import ACTPolicy
 
         return ACTPolicy
+    elif name == "act_hier":
+        from lerobot.policies.act_hier.modeling_act import ACTHierPolicy
+
+        return ACTHierPolicy
+    elif name == "act_hier_dual":
+        from lerobot.policies.act_hier_dual.modeling_act import ACTHierDualPolicy
+
+        return ACTHierDualPolicy
     elif name == "cascaded_act_interleave":
         from lerobot.policies.cascaded_act_interleave.modeling_act import ACTPolicy
 
@@ -109,6 +119,12 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return ACTSamdooConfig(**kwargs)
     elif policy_type == "cascaded_act":
         return CascadedACTConfig(**kwargs)
+    elif policy_type == "act_hier":
+        return ACTHierConfig(**kwargs)
+    elif policy_type == "act_hier_dual":
+        return ACTHierDualConfig(**kwargs)
+    elif policy_type == "act_hier":
+        return ACTHierConfig(**kwargs)
     elif policy_type == "cascaded_act_interleave":
         return CascadedACTInterleaveConfig(**kwargs)
     elif policy_type == "cascaded_act_dual":
