@@ -2,14 +2,14 @@
 set -euo pipefail
 
 REPO_IDS=("Dali424/sidepickcube_img_head_wrist")
-OUT_DIR="outputs/cascaded_act_norm_waist"
+OUT_DIR="outputs/cascaded_act_interleave_latent_first"
 
 for REPO in "${REPO_IDS[@]}"; do
   CUDA_VISIBLE_DEVICES=0 python src/lerobot/scripts/train.py \
     --dataset.repo_id="${REPO}" \
     --policy.push_to_hub=false \
-    --policy.type=cascaded_act \
-    --policy.norm_waist_tokens=true \
+    --policy.type=cascaded_act_interleave \
+    --policy.arm_cross_use_encoder_first=false \
     --output_dir="${OUT_DIR}" \
     --steps=300000
 done

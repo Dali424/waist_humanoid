@@ -34,23 +34,23 @@ from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.ops.misc import FrozenBatchNorm2d
 
 from lerobot.constants import ACTION, OBS_IMAGES
-from lerobot.policies.cascaded_act.configuration_act import CascadedACTConfig
+from lerobot.policies.act_samdoo.configuration_act import ACTSamdooConfig
 from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.pretrained import PreTrainedPolicy
 
 
-class ACTPolicy(PreTrainedPolicy):
+class ACTSamdooPolicy(PreTrainedPolicy):
     """
     Action Chunking Transformer Policy as per Learning Fine-Grained Bimanual Manipulation with Low-Cost
     Hardware (paper: https://huggingface.co/papers/2304.13705, code: https://github.com/tonyzhaozh/act)
     """
 
-    config_class = CascadedACTConfig
-    name = "cascaded_act"
+    config_class = ACTSamdooConfig
+    name = "ACT_samdoo"
 
     def __init__(
         self,
-        config: CascadedACTConfig,
+        config: ACTSamdooConfig,
         dataset_stats: dict[str, dict[str, Tensor]] | None = None,
     ):
         """
@@ -154,12 +154,27 @@ class ACTPolicy(PreTrainedPolicy):
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
 
         batch = self.normalize_targets(batch)
-        actions_hat, loss_dict = self.model(batch)
+        actions_hat, (mu_hat, log_sigma_x2_hat) = self.model(batch)
 
-        loss = loss_dict.get("total_loss", torch.tensor(0.0, device=actions_hat.device))
-        # Detach tensors for logging
-        loss_log = {k: (v.detach().item() if torch.is_tensor(v) else v) for k, v in loss_dict.items()}
-        return loss, loss_log
+        l1_loss = (
+            F.l1_loss(batch[ACTION], actions_hat, reduction="none") * ~batch["action_is_pad"].unsqueeze(-1)
+        ).mean()
+
+        loss_dict = {"l1_loss": l1_loss.item()}
+        if self.config.use_vae:
+            # Calculate Dₖₗ(latent_pdf || standard_normal). Note: After computing the KL-divergence for
+            # each dimension independently, we sum over the latent dimension to get the total
+            # KL-divergence per batch element, then take the mean over the batch.
+            # (See App. B of https://huggingface.co/papers/1312.6114 for more details).
+            mean_kld = (
+                (-0.5 * (1 + log_sigma_x2_hat - mu_hat.pow(2) - (log_sigma_x2_hat).exp())).sum(-1).mean()
+            )
+            loss_dict["kld_loss"] = mean_kld.item()
+            loss = l1_loss + mean_kld * self.config.kl_weight
+        else:
+            loss = l1_loss
+
+        return loss, loss_dict
 
 
 class ACTTemporalEnsembler:
@@ -254,7 +269,7 @@ class ACTTemporalEnsembler:
 
 
 class ACT(nn.Module):
-    """Action Chunking Transformer: The underlying neural network for ACTPolicy.
+    """Action Chunking Transformer: The underlying neural network for ACTSamdooPolicy.
 
     Note: In this code we use the terms `vae_encoder`, 'encoder', `decoder`. The meanings are as follows.
         - The `vae_encoder` is, as per the literature around variational auto-encoders (VAE), the part of the
@@ -288,7 +303,7 @@ class ACT(nn.Module):
                                 └───────────────────────┘
     """
 
-    def __init__(self, config: CascadedACTConfig):
+    def __init__(self, config: ACTSamdooConfig):
         # BERT style VAE encoder with input tokens [cls, robot_state, *action_sequence].
         # The cls token forms parameters of the latent's distribution (like this [*means, *log_variances]).
         super().__init__()
@@ -333,9 +348,7 @@ class ACT(nn.Module):
 
         # Transformer (acts as VAE decoder when training with the variational objective).
         self.encoder = ACTEncoder(config)
-        # Cascaded decoders
-        self.waist_decoder = ACTDecoder(config)
-        self.arm_decoder = ACTDecoder(config)
+        self.decoder = ACTDecoder(config)
 
         # Transformer encoder input projections. The tokens will be structured like
         # [latent, (robot_state), (env_state), (image_feature_map_pixels)].
@@ -362,32 +375,31 @@ class ACT(nn.Module):
         if self.config.image_features:
             self.encoder_cam_feat_pos_embed = ACTSinusoidalPositionEmbedding2d(config.dim_model // 2)
 
-        # Transformer decoder positional embedding (shared across cascaded decoders).
+        # Transformer decoder.
+        # Learnable positional embedding for the transformer's decoder (in the style of DETR object queries).
         self.decoder_pos_embed = nn.Embedding(config.chunk_size, config.dim_model)
+        # Buffer for decoder input queries to avoid per-forward allocations/device transfers.
+        self.register_buffer(
+            "decoder_in_template", torch.zeros(config.chunk_size, 1, config.dim_model), persistent=False
+        )
 
-        # Heads for cascaded outputs and embeddings to feed predicted chunks back.
-        self.waist_head = nn.Linear(config.dim_model, 3)
-        self.arm_head = nn.Linear(config.dim_model, 26)
-        self.waist_token_norm = nn.LayerNorm(config.dim_model) if config.norm_waist_tokens else nn.Identity()
-        self.waist_token_proj = nn.Linear(config.dim_model, config.dim_model)
-        self.arm_token_proj = nn.Linear(config.dim_model, config.dim_model)
+        # DETR-style decoupled heads for waist, arm, and hand predictions.
+        self.waist_head = nn.Linear(config.dim_model, self.config.waist_dim)
+        self.arm_head = nn.Linear(config.dim_model, self.config.arm_dim)
+        self.hand_head = nn.Linear(config.dim_model, self.config.hand_dim)
 
         self._reset_parameters()
 
     def _reset_parameters(self):
         """Xavier-uniform initialization of the transformer parameters as in the original code."""
-        modules = [self.encoder, self.waist_decoder, self.arm_decoder]
-        for m in modules:
-            for p in m.parameters():
-                if p.dim() > 1:
-                    nn.init.xavier_uniform_(p)
-        for head in [self.waist_head, self.arm_head, self.waist_token_proj, self.arm_token_proj]:
-            if isinstance(head, nn.Linear):
-                nn.init.xavier_uniform_(head.weight)
-                if head.bias is not None:
-                    nn.init.zeros_(head.bias)
+        for p in chain(self.encoder.parameters(), self.decoder.parameters()):
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+        for head in (self.waist_head, self.arm_head, self.hand_head):
+            nn.init.xavier_uniform_(head.weight)
+            nn.init.zeros_(head.bias)
 
-    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
+    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, tuple[Tensor, Tensor] | tuple[None, None]]:
         """A forward pass through the Action Chunking Transformer (with optional VAE encoder).
 
         `batch` should have the following structure:
@@ -506,114 +518,37 @@ class ACT(nn.Module):
 
         # Forward pass through the transformer modules.
         encoder_out = self.encoder(encoder_in_tokens, pos_embed=encoder_in_pos_embed)
-
-        # Shared decoder queries (chunk_size tokens)
-        decoder_queries = torch.zeros(
-            (self.config.chunk_size, batch_size, self.config.dim_model),
-            dtype=encoder_in_pos_embed.dtype,
-            device=encoder_in_pos_embed.device,
+        decoder_in = self.decoder_in_template.expand(-1, batch_size, -1).type_as(encoder_in_pos_embed)
+        decoder_out = self.decoder(
+            decoder_in,
+            encoder_out,
+            encoder_pos_embed=encoder_in_pos_embed,
+            decoder_pos_embed=self.decoder_pos_embed.weight.unsqueeze(1),
         )
-        decoder_pos = self.decoder_pos_embed.weight.unsqueeze(1)
 
-        if self.config.arm_first:
-            # Arm decoder first (only encoder tokens), waist conditioned on arm tokens.
-            arm_latent = self.arm_decoder(
-                decoder_queries,
-                encoder_out,
-                encoder_pos_embed=encoder_in_pos_embed,
-                decoder_pos_embed=decoder_pos,
-            ).transpose(0, 1)
-            pred_arm_ee = self.arm_head(arm_latent)  # (B,S,26)
-            arm_tokens = self.arm_token_proj(arm_latent).transpose(0, 1)  # (S,B,D)
+        # Move back to (B, S, C).
+        decoder_out = decoder_out.transpose(0, 1)
 
-            waist_memory = torch.cat([encoder_out, arm_tokens], dim=0)
-            waist_pos = torch.cat(
-                [
-                    encoder_in_pos_embed.expand(-1, arm_tokens.shape[1], -1),
-                    torch.zeros_like(arm_tokens),
-                ],
-                dim=0,
-            )
-            waist_latent = self.waist_decoder(
-                decoder_queries,
-                waist_memory,
-                encoder_pos_embed=waist_pos,
-                decoder_pos_embed=decoder_pos,
-            ).transpose(0, 1)
-            pred_body = self.waist_head(waist_latent)  # (B,S,3)
-        else:
-            # Waist decoder first, arm conditioned on waist tokens.
-            waist_latent = self.waist_decoder(
-                decoder_queries,
-                encoder_out,
-                encoder_pos_embed=encoder_in_pos_embed,
-                decoder_pos_embed=decoder_pos,
-            ).transpose(0, 1)
-            pred_body = self.waist_head(waist_latent)  # (B,S,3)
-            waist_tokens = self.waist_token_proj(self.waist_token_norm(waist_latent)).transpose(0, 1)  # (S,B,D)
+        waist = self.waist_head(decoder_out)
+        arm = self.arm_head(decoder_out)
+        hand = self.hand_head(decoder_out)
 
-            arm_memory = torch.cat([encoder_out, waist_tokens], dim=0)
-            arm_pos = torch.cat(
-                [
-                    encoder_in_pos_embed.expand(-1, waist_tokens.shape[1], -1),
-                    torch.zeros_like(waist_tokens),
-                ],
-                dim=0,
-            )
-            arm_latent = self.arm_decoder(
-                decoder_queries,
-                arm_memory,
-                encoder_pos_embed=arm_pos,
-                decoder_pos_embed=decoder_pos,
-            ).transpose(0, 1)
-            pred_arm_ee = self.arm_head(arm_latent)  # (B,S,26)
+        # Scatter head outputs into the correct action slots.
+        action_dim = self.config.action_feature.shape[0]
+        actions = torch.zeros(
+            decoder_out.shape[0], decoder_out.shape[1], action_dim, device=decoder_out.device, dtype=decoder_out.dtype
+        )
+        actions[:, :, self.config.waist_indices] = waist
+        actions[:, :, self.config.arm_indices] = arm
+        actions[:, :, self.config.hand_indices] = hand
 
-        # Final action: [left_arm7, right_arm7, left_ee6, right_ee6, body3]
-        left_arm = pred_arm_ee[:, :, :7]
-        right_arm = pred_arm_ee[:, :, 7:14]
-        left_ee = pred_arm_ee[:, :, 14:20]
-        right_ee = pred_arm_ee[:, :, 20:26]
-        actions = torch.cat([left_arm, right_arm, left_ee, right_ee, pred_body], dim=-1)
-
-        loss_dict: dict[str, Tensor] = {}
-        if self.training and ACTION in batch and "action_is_pad" in batch:
-            target = batch[ACTION]
-            pad_mask = (~batch["action_is_pad"]).unsqueeze(-1).float()  # (B,S,1)
-
-            def masked_mse(pred, tgt):
-                loss = F.mse_loss(pred, tgt, reduction="none") * pad_mask
-                denom = pad_mask.sum().clamp_min(1.0)
-                return loss.sum() / denom
-
-            gt_left_arm = target[:, :, :7]
-            gt_right_arm = target[:, :, 7:14]
-            gt_left_ee = target[:, :, 14:20]
-            gt_right_ee = target[:, :, 20:26]
-            gt_body = target[:, :, 26:29]
-
-            l_waist = masked_mse(pred_body, gt_body)
-            l_arm = masked_mse(pred_arm_ee[:, :, :14], torch.cat([gt_left_arm, gt_right_arm], dim=-1))
-            l_ee = masked_mse(pred_arm_ee[:, :, 14:26], torch.cat([gt_left_ee, gt_right_ee], dim=-1))
-
-            total = (
-                self.config.alpha_waist * l_waist
-                + self.config.beta_arm * l_arm
-                + self.config.gamma_ee * l_ee
-            )
-            loss_dict = {
-                "total_loss": total,
-                "l_waist": l_waist.detach(),
-                "l_arm": l_arm.detach(),
-                "l_ee": l_ee.detach(),
-            }
-
-        return actions, loss_dict
+        return actions, (mu, log_sigma_x2)
 
 
 class ACTEncoder(nn.Module):
     """Convenience module for running multiple encoder layers, maybe followed by normalization."""
 
-    def __init__(self, config: CascadedACTConfig, is_vae_encoder: bool = False):
+    def __init__(self, config: ACTSamdooConfig, is_vae_encoder: bool = False):
         super().__init__()
         self.is_vae_encoder = is_vae_encoder
         num_layers = config.n_vae_encoder_layers if self.is_vae_encoder else config.n_encoder_layers
@@ -630,7 +565,7 @@ class ACTEncoder(nn.Module):
 
 
 class ACTEncoderLayer(nn.Module):
-    def __init__(self, config: CascadedACTConfig):
+    def __init__(self, config: ACTSamdooConfig):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
 
@@ -669,7 +604,7 @@ class ACTEncoderLayer(nn.Module):
 
 
 class ACTDecoder(nn.Module):
-    def __init__(self, config: CascadedACTConfig):
+    def __init__(self, config: ACTSamdooConfig):
         """Convenience module for running multiple decoder layers followed by normalization."""
         super().__init__()
         self.layers = nn.ModuleList([ACTDecoderLayer(config) for _ in range(config.n_decoder_layers)])
@@ -692,7 +627,7 @@ class ACTDecoder(nn.Module):
 
 
 class ACTDecoderLayer(nn.Module):
-    def __init__(self, config: CascadedACTConfig):
+    def __init__(self, config: ACTSamdooConfig):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
         self.multihead_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)

@@ -34,7 +34,7 @@ from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.ops.misc import FrozenBatchNorm2d
 
 from lerobot.constants import ACTION, OBS_IMAGES
-from lerobot.policies.cascaded_act.configuration_act import CascadedACTConfig
+from lerobot.policies.cascaded_act_interleave.configuration_act import CascadedACTInterleaveConfig
 from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.pretrained import PreTrainedPolicy
 
@@ -45,12 +45,12 @@ class ACTPolicy(PreTrainedPolicy):
     Hardware (paper: https://huggingface.co/papers/2304.13705, code: https://github.com/tonyzhaozh/act)
     """
 
-    config_class = CascadedACTConfig
-    name = "cascaded_act"
+    config_class = CascadedACTInterleaveConfig
+    name = "cascaded_act_interleave"
 
     def __init__(
         self,
-        config: CascadedACTConfig,
+        config: CascadedACTInterleaveConfig,
         dataset_stats: dict[str, dict[str, Tensor]] | None = None,
     ):
         """
@@ -288,7 +288,7 @@ class ACT(nn.Module):
                                 └───────────────────────┘
     """
 
-    def __init__(self, config: CascadedACTConfig):
+    def __init__(self, config: CascadedACTInterleaveConfig):
         # BERT style VAE encoder with input tokens [cls, robot_state, *action_sequence].
         # The cls token forms parameters of the latent's distribution (like this [*means, *log_variances]).
         super().__init__()
@@ -515,56 +515,67 @@ class ACT(nn.Module):
         )
         decoder_pos = self.decoder_pos_embed.weight.unsqueeze(1)
 
+        base_memory = encoder_out
+        base_pos = encoder_in_pos_embed
+
         if self.config.arm_first:
-            # Arm decoder first (only encoder tokens), waist conditioned on arm tokens.
+            # Arm decoder first (encoder only), waist decoder with hybrid cross-attention.
             arm_latent = self.arm_decoder(
                 decoder_queries,
-                encoder_out,
-                encoder_pos_embed=encoder_in_pos_embed,
+                base_memory,
                 decoder_pos_embed=decoder_pos,
+                base_pos_embed=base_pos,
             ).transpose(0, 1)
             pred_arm_ee = self.arm_head(arm_latent)  # (B,S,26)
             arm_tokens = self.arm_token_proj(arm_latent).transpose(0, 1)  # (S,B,D)
 
-            waist_memory = torch.cat([encoder_out, arm_tokens], dim=0)
-            waist_pos = torch.cat(
+            waist_combined_memory = torch.cat([base_memory, arm_tokens], dim=0)
+            waist_combined_pos = torch.cat(
                 [
-                    encoder_in_pos_embed.expand(-1, arm_tokens.shape[1], -1),
+                    base_pos.expand(-1, arm_tokens.shape[1], -1),
                     torch.zeros_like(arm_tokens),
                 ],
                 dim=0,
             )
             waist_latent = self.waist_decoder(
                 decoder_queries,
-                waist_memory,
-                encoder_pos_embed=waist_pos,
+                base_memory,
                 decoder_pos_embed=decoder_pos,
+                base_pos_embed=base_pos,
+                combined_memory=waist_combined_memory,
+                combined_pos_embed=waist_combined_pos,
+                use_encoder_first=self.config.arm_cross_use_encoder_first,
+                switch_layer=self.config.arm_cross_switch_layer,
             ).transpose(0, 1)
             pred_body = self.waist_head(waist_latent)  # (B,S,3)
         else:
-            # Waist decoder first, arm conditioned on waist tokens.
+            # Waist decoder first, arm decoder with hybrid cross-attention.
             waist_latent = self.waist_decoder(
                 decoder_queries,
-                encoder_out,
-                encoder_pos_embed=encoder_in_pos_embed,
+                base_memory,
                 decoder_pos_embed=decoder_pos,
+                base_pos_embed=base_pos,
             ).transpose(0, 1)
             pred_body = self.waist_head(waist_latent)  # (B,S,3)
             waist_tokens = self.waist_token_proj(self.waist_token_norm(waist_latent)).transpose(0, 1)  # (S,B,D)
 
-            arm_memory = torch.cat([encoder_out, waist_tokens], dim=0)
-            arm_pos = torch.cat(
+            arm_combined_memory = torch.cat([base_memory, waist_tokens], dim=0)
+            arm_combined_pos = torch.cat(
                 [
-                    encoder_in_pos_embed.expand(-1, waist_tokens.shape[1], -1),
+                    base_pos.expand(-1, waist_tokens.shape[1], -1),
                     torch.zeros_like(waist_tokens),
                 ],
                 dim=0,
             )
             arm_latent = self.arm_decoder(
                 decoder_queries,
-                arm_memory,
-                encoder_pos_embed=arm_pos,
+                base_memory,
                 decoder_pos_embed=decoder_pos,
+                base_pos_embed=base_pos,
+                combined_memory=arm_combined_memory,
+                combined_pos_embed=arm_combined_pos,
+                use_encoder_first=self.config.arm_cross_use_encoder_first,
+                switch_layer=self.config.arm_cross_switch_layer,
             ).transpose(0, 1)
             pred_arm_ee = self.arm_head(arm_latent)  # (B,S,26)
 
@@ -613,7 +624,7 @@ class ACT(nn.Module):
 class ACTEncoder(nn.Module):
     """Convenience module for running multiple encoder layers, maybe followed by normalization."""
 
-    def __init__(self, config: CascadedACTConfig, is_vae_encoder: bool = False):
+    def __init__(self, config: CascadedACTInterleaveConfig, is_vae_encoder: bool = False):
         super().__init__()
         self.is_vae_encoder = is_vae_encoder
         num_layers = config.n_vae_encoder_layers if self.is_vae_encoder else config.n_encoder_layers
@@ -630,7 +641,7 @@ class ACTEncoder(nn.Module):
 
 
 class ACTEncoderLayer(nn.Module):
-    def __init__(self, config: CascadedACTConfig):
+    def __init__(self, config: CascadedACTInterleaveConfig):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
 
@@ -669,7 +680,7 @@ class ACTEncoderLayer(nn.Module):
 
 
 class ACTDecoder(nn.Module):
-    def __init__(self, config: CascadedACTConfig):
+    def __init__(self, config: CascadedACTInterleaveConfig):
         """Convenience module for running multiple decoder layers followed by normalization."""
         super().__init__()
         self.layers = nn.ModuleList([ACTDecoderLayer(config) for _ in range(config.n_decoder_layers)])
@@ -678,21 +689,34 @@ class ACTDecoder(nn.Module):
     def forward(
         self,
         x: Tensor,
-        encoder_out: Tensor,
+        base_memory: Tensor,
         decoder_pos_embed: Tensor | None = None,
-        encoder_pos_embed: Tensor | None = None,
+        base_pos_embed: Tensor | None = None,
+        combined_memory: Tensor | None = None,
+        combined_pos_embed: Tensor | None = None,
+        use_encoder_first: bool = True,
+        switch_layer: int | None = None,
     ) -> Tensor:
-        for layer in self.layers:
-            x = layer(
-                x, encoder_out, decoder_pos_embed=decoder_pos_embed, encoder_pos_embed=encoder_pos_embed
+        switch = len(self.layers) // 2 if switch_layer is None else switch_layer
+        use_combined_available = combined_memory is not None and combined_pos_embed is not None
+        for idx, layer in enumerate(self.layers):
+            use_combined = (
+                use_combined_available
+                and (
+                    (idx >= switch and use_encoder_first)
+                    or (idx < switch and not use_encoder_first)
+                )
             )
+            memory = combined_memory if use_combined else base_memory
+            pos_embed = combined_pos_embed if use_combined else base_pos_embed
+            x = layer(x, memory, decoder_pos_embed=decoder_pos_embed, encoder_pos_embed=pos_embed)
         if self.norm is not None:
             x = self.norm(x)
         return x
 
 
 class ACTDecoderLayer(nn.Module):
-    def __init__(self, config: CascadedACTConfig):
+    def __init__(self, config: CascadedACTInterleaveConfig):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
         self.multihead_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)

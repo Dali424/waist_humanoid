@@ -25,7 +25,9 @@ from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.envs.configs import EnvConfig
 from lerobot.envs.utils import env_to_policy_features
 from lerobot.policies.act.configuration_act import ACTConfig
+from lerobot.policies.act_samdoo.configuration_act import ACTSamdooConfig
 from lerobot.policies.cascaded_act.configuration_act import CascadedACTConfig
+from lerobot.policies.cascaded_act_interleave.configuration_act import CascadedACTInterleaveConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
 from lerobot.policies.pi0fast.configuration_pi0fast import PI0FASTConfig
@@ -51,8 +53,16 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.act.modeling_act import ACTPolicy
 
         return ACTPolicy
+    elif name == "ACT_samdoo":
+        from lerobot.policies.act_samdoo.modeling_act import ACTSamdooPolicy
+
+        return ACTSamdooPolicy
     elif name == "cascaded_act":
         from lerobot.policies.cascaded_act.modeling_act import ACTPolicy
+
+        return ACTPolicy
+    elif name == "cascaded_act_interleave":
+        from lerobot.policies.cascaded_act_interleave.modeling_act import ACTPolicy
 
         return ACTPolicy
     elif name == "vqbet":
@@ -90,8 +100,12 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return DiffusionConfig(**kwargs)
     elif policy_type == "act":
         return ACTConfig(**kwargs)
+    elif policy_type == "ACT_samdoo":
+        return ACTSamdooConfig(**kwargs)
     elif policy_type == "cascaded_act":
         return CascadedACTConfig(**kwargs)
+    elif policy_type == "cascaded_act_interleave":
+        return CascadedACTInterleaveConfig(**kwargs)
     elif policy_type == "cascaded_act_armonly":
         return CascadedACTArmOnlyConfig(**kwargs)
     elif policy_type == "vqbet":

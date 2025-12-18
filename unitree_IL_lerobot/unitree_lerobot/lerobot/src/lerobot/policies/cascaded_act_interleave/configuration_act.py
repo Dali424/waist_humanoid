@@ -20,9 +20,9 @@ from lerobot.configs.types import NormalizationMode
 from lerobot.optim.optimizers import AdamWConfig
 
 
-@PreTrainedConfig.register_subclass("cascaded_act")
+@PreTrainedConfig.register_subclass("cascaded_act_interleave")
 @dataclass
-class CascadedACTConfig(PreTrainedConfig):
+class CascadedACTInterleaveConfig(PreTrainedConfig):
     """Configuration class for the Action Chunking Transformers policy.
 
     Defaults are configured for training on bimanual Aloha tasks like "insertion" or "transfer".
@@ -145,6 +145,9 @@ class CascadedACTConfig(PreTrainedConfig):
     norm_waist_tokens: bool = False
     # Decoder ordering: False = waist first then arm, True = arm first then waist
     arm_first: bool = False
+    # Hybrid cross-attention for second decoder
+    arm_cross_switch_layer: int | None = None
+    arm_cross_use_encoder_first: bool = True
 
     def __post_init__(self):
         super().__post_init__()
@@ -167,6 +170,14 @@ class CascadedACTConfig(PreTrainedConfig):
         if self.n_obs_steps != 1:
             raise ValueError(
                 f"Multiple observation steps not handled yet. Got `nobs_steps={self.n_obs_steps}`"
+            )
+        if self.arm_cross_switch_layer is None:
+            self.arm_cross_switch_layer = self.n_decoder_layers // 2
+        self.arm_cross_switch_layer = int(self.arm_cross_switch_layer)
+        if not (0 <= self.arm_cross_switch_layer <= self.n_decoder_layers):
+            raise ValueError(
+                f"`arm_cross_switch_layer` must be in [0, n_decoder_layers]; "
+                f"got {self.arm_cross_switch_layer} with n_decoder_layers={self.n_decoder_layers}"
             )
 
     def get_optimizer_preset(self) -> AdamWConfig:

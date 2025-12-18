@@ -1,19 +1,14 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-REPO_IDS=(
-  "Dali424/sidepickcube_img_head_wrist"
-)
+REPO_IDS=("Dali424/sidepickcube_img_head_wrist")
+OUT_DIR="outputs/cascaded_act_baseline"
 
 for REPO in "${REPO_IDS[@]}"; do
-
   CUDA_VISIBLE_DEVICES=0 python src/lerobot/scripts/train.py \
     --dataset.repo_id="${REPO}" \
     --policy.push_to_hub=false \
-    --policy.type=act \
-    --output_dir=outputs/decoder_layer_7/act \
-    --steps=300000 \
     --policy.type=cascaded_act \
-    --policy.type=cascaded_act 
-
+    --output_dir="${OUT_DIR}" \
+    --steps=300000
 done
