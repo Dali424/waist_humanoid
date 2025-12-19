@@ -25,8 +25,10 @@ from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.envs.configs import EnvConfig
 from lerobot.envs.utils import env_to_policy_features
 from lerobot.policies.act.configuration_act import ACTConfig
-from lerobot.policies.act_samdoo.configuration_act import ACTSamdooConfig
 from lerobot.policies.act_hier.configuration_act import ACTHierConfig
+from lerobot.policies.act_hier3.configuration_act import ACTHier3Config
+from lerobot.policies.act_hier3_dual.configuration_act import ACTHier3DualConfig
+from lerobot.policies.act_samdoo.configuration_act import ACTSamdooConfig
 from lerobot.policies.act_hier_dual.configuration_act import ACTHierDualConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
@@ -61,6 +63,14 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.act_hier.modeling_act import ACTHierPolicy
 
         return ACTHierPolicy
+    elif name == "act_hier3":
+        from lerobot.policies.act_hier3.modeling_act import ACTHier3Policy
+
+        return ACTHier3Policy
+    elif name == "act_hier3_dual":
+        from lerobot.policies.act_hier3_dual.modeling_act import ACTHier3DualPolicy
+
+        return ACTHier3DualPolicy
     elif name == "act_hier_dual":
         from lerobot.policies.act_hier_dual.modeling_act import ACTHierDualPolicy
 
@@ -104,6 +114,10 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return ACTSamdooConfig(**kwargs)
     elif policy_type == "act_hier":
         return ACTHierConfig(**kwargs)
+    elif policy_type == "act_hier3":
+        return ACTHier3Config(**kwargs)
+    elif policy_type == "act_hier3_dual":
+        return ACTHier3DualConfig(**kwargs)
     elif policy_type == "act_hier_dual":
         return ACTHierDualConfig(**kwargs)
     elif policy_type == "vqbet":
