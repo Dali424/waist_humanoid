@@ -28,6 +28,8 @@ from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.act_samdoo.configuration_act import ACTSamdooConfig
 from lerobot.policies.act_hier.configuration_act import ACTHierConfig
 from lerobot.policies.act_hier_dual.configuration_act import ACTHierDualConfig
+from lerobot.policies.act_hier_hand.configuration_act import ACTHierHandConfig
+from lerobot.policies.act_hier_dual_hand.configuration_act import ACTHierDualHandConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
 from lerobot.policies.pi0fast.configuration_pi0fast import PI0FASTConfig
@@ -65,6 +67,14 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.act_hier_dual.modeling_act import ACTHierDualPolicy
 
         return ACTHierDualPolicy
+    elif name == "act_hier_hand":
+        from lerobot.policies.act_hier_hand.modeling_act import ACTHierHandPolicy
+
+        return ACTHierHandPolicy
+    elif name == "act_hier_dual_hand":
+        from lerobot.policies.act_hier_dual_hand.modeling_act import ACTHierDualHandPolicy
+
+        return ACTHierDualHandPolicy
     elif name == "vqbet":
         from lerobot.policies.vqbet.modeling_vqbet import VQBeTPolicy
 
@@ -106,6 +116,10 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return ACTHierConfig(**kwargs)
     elif policy_type == "act_hier_dual":
         return ACTHierDualConfig(**kwargs)
+    elif policy_type == "act_hier_hand":
+        return ACTHierHandConfig(**kwargs)
+    elif policy_type == "act_hier_dual_hand":
+        return ACTHierDualHandConfig(**kwargs)
     elif policy_type == "vqbet":
         return VQBeTConfig(**kwargs)
     elif policy_type == "pi0":
