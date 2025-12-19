@@ -10,11 +10,18 @@ from lerobot.optim.optimizers import AdamWConfig
 @PreTrainedConfig.register_subclass("act_hier_dual_hand")
 @dataclass
 class ACTHierDualHandConfig(PreTrainedConfig):
-    """Configuration class for hierarchical ACT with dual cross hand decoder."""
+    """Hierarchical ACT dual: decoder1 waist+arm, decoder2 dual-cross hand."""
 
     n_obs_steps: int = 1
     chunk_size: int = 100
     n_action_steps: int = 100
+
+    waist_dim: int = 3
+    arm_dim: int = 14
+    hand_dim: int = 12
+    waist_indices: list[int] = field(default_factory=lambda: [26, 27, 28])
+    arm_indices: list[int] = field(default_factory=lambda: list(range(0, 14)))
+    hand_indices: list[int] = field(default_factory=lambda: list(range(14, 26)))
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -47,46 +54,26 @@ class ACTHierDualHandConfig(PreTrainedConfig):
     optimizer_weight_decay: float = 1e-4
     optimizer_lr_backbone: float = 1e-5
 
-    waist_dim: int = 3
-    arm_dim: int = 14
-    hand_dim: int = 12
-    waist_indices: list[int] = field(default_factory=lambda: [26, 27, 28])
-    arm_indices: list[int] = field(default_factory=lambda: list(range(14)))
-    hand_indices: list[int] = field(default_factory=lambda: list(range(14, 26)))
-
     robot_state_feature = None
     env_state_feature = None
     image_features: list[str] | None = None
     action_feature = None
 
-    norm_waist_tokens: bool = False
-
     def __post_init__(self):
         super().__post_init__()
         if not self.vision_backbone.startswith("resnet"):
-            raise ValueError(
-                f"`vision_backbone` must be one of the ResNet variants. Got {self.vision_backbone}."
-            )
+            raise ValueError(f"`vision_backbone` must be a ResNet variant, got {self.vision_backbone}.")
         if self.temporal_ensemble_coeff is not None and self.n_action_steps > 1:
-            raise NotImplementedError(
-                "`n_action_steps` must be 1 when using temporal ensembling. This is "
-                "because the policy needs to be queried every step to compute the ensembled action."
-            )
+            raise NotImplementedError("`n_action_steps` must be 1 when using temporal ensembling.")
         if self.n_action_steps > self.chunk_size:
             raise ValueError(
-                f"The chunk size is the upper bound for the number of action steps per model invocation. Got "
-                f"{self.n_action_steps} for `n_action_steps` and {self.chunk_size} for `chunk_size`."
+                f"`n_action_steps` ({self.n_action_steps}) cannot exceed chunk_size ({self.chunk_size})."
             )
         if self.n_obs_steps != 1:
-            raise ValueError(
-                f"Multiple observation steps not handled yet. Got `nobs_steps={self.n_obs_steps}`"
-            )
+            raise ValueError(f"Multiple observation steps not handled yet. Got `n_obs_steps={self.n_obs_steps}`")
 
     def get_optimizer_preset(self) -> AdamWConfig:
-        return AdamWConfig(
-            lr=self.optimizer_lr,
-            weight_decay=self.optimizer_weight_decay,
-        )
+        return AdamWConfig(lr=self.optimizer_lr, weight_decay=self.optimizer_weight_decay)
 
     def get_scheduler_preset(self) -> None:
         return None
@@ -97,7 +84,7 @@ class ACTHierDualHandConfig(PreTrainedConfig):
         )
         has_env = "observation.environment_state" in self.input_features
         if not self.image_features and not self.env_state_feature and not (has_visual or has_env):
-            raise ValueError("You must provide at least one image or the environment state among the inputs.")
+            raise ValueError("You must provide at least one image or environment state among the inputs.")
 
     @property
     def observation_delta_indices(self) -> None:

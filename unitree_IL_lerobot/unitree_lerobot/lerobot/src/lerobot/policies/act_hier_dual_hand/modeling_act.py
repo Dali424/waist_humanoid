@@ -328,7 +328,7 @@ class ACT(nn.Module):
             encoder_out,
             waist_arm_tokens,
             encoder_pos_embed=encoder_in_pos_embed,
-            waist_pos_embed=waist_pos,
+            waist_arm_pos_embed=waist_pos,
             decoder_pos_embed=decoder_pos,
         )
         hand_latent = hand_latent.transpose(0, 1)

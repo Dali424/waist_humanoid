@@ -1,1 +1,2 @@
-"""Hierarchical ACT with waist+arm decoder and hand decoder."""
+"""Hierarchical ACT with waist+arm decoder then hand decoder."""
+
