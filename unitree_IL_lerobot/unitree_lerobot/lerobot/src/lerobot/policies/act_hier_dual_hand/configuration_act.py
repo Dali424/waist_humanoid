@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 
 from lerobot.configs.policies import PreTrainedConfig
-from lerobot.configs.types import NormalizationMode
+from lerobot.configs.types import FeatureType, NormalizationMode
 from lerobot.optim.optimizers import AdamWConfig
 
 
@@ -92,7 +92,11 @@ class ACTHierDualHandConfig(PreTrainedConfig):
         return None
 
     def validate_features(self) -> None:
-        if not self.image_features and not self.env_state_feature:
+        has_visual = any(
+            getattr(feat, "type", None) is FeatureType.VISUAL for feat in self.input_features.values()
+        )
+        has_env = "observation.environment_state" in self.input_features
+        if not self.image_features and not self.env_state_feature and not (has_visual or has_env):
             raise ValueError("You must provide at least one image or the environment state among the inputs.")
 
     @property
