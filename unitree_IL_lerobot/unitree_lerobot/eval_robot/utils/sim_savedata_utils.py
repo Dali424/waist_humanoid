@@ -211,7 +211,7 @@ class EvalRealConfig:
     arm: str = "G1_29"  # G1_29, G1_23
     ee: str = "dex3"  # dex3, dex1, inspire1, brainco
     # Enable waist control (adds waist DOF to obs/action and commands waist joints)
-    use_waist: bool = False
+    use_waist: bool = True
 
     # Attention logging
     save_attention: bool = False  # enable saving attention maps during eval

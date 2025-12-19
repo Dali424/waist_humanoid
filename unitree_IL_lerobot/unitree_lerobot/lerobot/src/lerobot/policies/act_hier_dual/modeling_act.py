@@ -397,7 +397,7 @@ class ACT(nn.Module):
 
     def _reset_parameters(self):
         """Xavier-uniform initialization of the transformer parameters as in the original code."""
-        for p in chain(self.encoder.parameters(), self.decoder.parameters()):
+        for p in chain(self.encoder.parameters(), self.waist_decoder.parameters(), self.arm_decoder.parameters()):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
         for head in (self.waist_head, self.arm_head, self.hand_head):

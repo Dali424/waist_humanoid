@@ -85,21 +85,14 @@ def eval_policy(
         step = dataset[from_idx]
         init_arm_pose = step["observation.state"][:arm_dof].cpu().numpy()
 
-        # Auto-detect waist usage from dataset shape vs controller DOF
-        try:
-            ds_state_dim = int(step["observation.state"].shape[0])
-            ee_total = 2 * ee_dof if cfg.ee else 0
-            expected_no_waist = int(arm_dof + ee_total)
-            expected_with_waist = int(expected_no_waist + waist_dof)
-            if not cfg.use_waist and waist_dof > 0 and ds_state_dim == expected_with_waist:
-                cfg.use_waist = True
+        # Auto-enable waist when DOF exists.
+        if waist_dof > 0:
+            cfg.use_waist = True
+            try:
                 if hasattr(arm_ctrl, "enable_waist_control"):
                     arm_ctrl.enable_waist_control(True)
-                logger_mp.info(
-                    f"Auto-enabled waist: dataset_dim={ds_state_dim}, expected_with_waist={expected_with_waist}"
-                )
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         user_input = input("Enter 's' to initialize the robot and start the evaluation: ")
         idx = 0

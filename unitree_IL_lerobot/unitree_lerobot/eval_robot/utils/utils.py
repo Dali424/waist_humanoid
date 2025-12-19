@@ -119,7 +119,7 @@ class EvalRealConfig:
     # Simulation flag (True when evaluating in Isaac sim / sim_main.py)
     sim: bool = True
     # Enable waist control (adds waist DOF to obs/action and commands waist joints)
-    use_waist: bool = False
+    use_waist: bool = True
 
     # Mode flags
     motion: bool = False
