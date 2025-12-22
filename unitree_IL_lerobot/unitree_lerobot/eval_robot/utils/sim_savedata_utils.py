@@ -35,6 +35,25 @@ def flatten_actions(actions: dict) -> list[float]:
     return left_arm + right_arm + left_ee + right_ee + body
 
 
+def reset_robot_to_initial_pose(init_arm_pose, robot_interface, reset_pose_publisher, policy, sim_reward_subscriber):
+    """Return the robot and sim to the recorded starting pose between episodes.
+
+    Note: reset_category '2' mirrors the in-sim '0' key (full reset, including robot pose).
+    """
+    logger_mp.info("Initializing scene and robot to starting pose...")
+    publish_reset_category(2, reset_pose_publisher)  # match keyboard '0' reset robot pose in sim_main.py
+    time.sleep(1.0)
+    publish_reset_category(1, reset_pose_publisher)  # match keyboard '9' reset cube in sim_main.py
+    time.sleep(1.0)
+    tau = robot_interface["arm_ik"].solve_tau(init_arm_pose)
+    robot_interface["arm_ctrl"].ctrl_dual_arm(init_arm_pose, tau)
+    time.sleep(1)
+    reset_policy(policy)
+    if sim_reward_subscriber:
+        sim_reward_subscriber.reset_data()
+    time.sleep(1)
+
+
 def process_data_add(
     episode_writer,
     observation_image,
@@ -174,28 +193,14 @@ def is_success(
         )
         reward_stats["episode_num"] = -1
         reward_stats["reward_sum"] = 0
-        time.sleep(1)
-        publish_reset_category(1, reset_pose_publisher)
-        time.sleep(1)
-        reset_policy(policy)
-        sim_reward_subscriber.reset_data()
+        reset_robot_to_initial_pose(init_arm_pose, robot_interface, reset_pose_publisher, policy, sim_reward_subscriber)
     # fail
     elif reward_stats["episode_num"] > cfg.max_episodes:
         process_data_save(episode_writer, "fail")
         logger_mp.info(f"Episode {reward_stats['episode_num']} finished with reward {reward_stats['reward_sum']}")
         reward_stats["episode_num"] = -1
         reward_stats["reward_sum"] = 0
-        reset_policy(policy)
-        sim_reward_subscriber.reset_data()
-        logger_mp.info("Initializing robot to starting pose...")
-        tau = robot_interface["arm_ik"].solve_tau(init_arm_pose)
-        robot_interface["arm_ctrl"].ctrl_dual_arm(init_arm_pose, tau)
-        time.sleep(1)
-        publish_reset_category(1, reset_pose_publisher)
-        time.sleep(1)
-        reset_policy(policy)
-        sim_reward_subscriber.reset_data()
-        time.sleep(1)
+        reset_robot_to_initial_pose(init_arm_pose, robot_interface, reset_pose_publisher, policy, sim_reward_subscriber)
 
 
 @dataclass

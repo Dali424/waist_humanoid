@@ -26,10 +26,14 @@ from lerobot.envs.configs import EnvConfig
 from lerobot.envs.utils import env_to_policy_features
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.act_hier.configuration_act import ACTHierConfig
-from lerobot.policies.act_hier3.configuration_act import ACTHier3Config
-from lerobot.policies.act_hier3_dual.configuration_act import ACTHier3DualConfig
-from lerobot.policies.act_samdoo.configuration_act import ACTSamdooConfig
+from lerobot.policies.act_hier_reverse.configuration_act import ACTHierReverseConfig
 from lerobot.policies.act_hier_dual.configuration_act import ACTHierDualConfig
+from lerobot.policies.act_hier_dual_reverse.configuration_act import ACTHierDualReverseConfig
+from lerobot.policies.act_hier3.configuration_act import ACTHier3Config
+from lerobot.policies.act_hier3_reverse.configuration_act import ACTHier3ReverseConfig
+from lerobot.policies.act_hier3_dual.configuration_act import ACTHier3DualConfig
+from lerobot.policies.act_hier3_dual_reverse.configuration_act import ACTHier3DualReverseConfig
+from lerobot.policies.act_samdoo.configuration_act import ACTSamdooConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
 from lerobot.policies.pi0fast.configuration_pi0fast import PI0FASTConfig
@@ -63,18 +67,34 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.act_hier.modeling_act import ACTHierPolicy
 
         return ACTHierPolicy
-    elif name == "act_hier3":
-        from lerobot.policies.act_hier3.modeling_act import ACTHier3Policy
+    elif name == "act_hier_reverse":
+        from lerobot.policies.act_hier_reverse.modeling_act import ACTHierReversePolicy
 
-        return ACTHier3Policy
-    elif name == "act_hier3_dual":
-        from lerobot.policies.act_hier3_dual.modeling_act import ACTHier3DualPolicy
-
-        return ACTHier3DualPolicy
+        return ACTHierReversePolicy
     elif name == "act_hier_dual":
         from lerobot.policies.act_hier_dual.modeling_act import ACTHierDualPolicy
 
         return ACTHierDualPolicy
+    elif name == "act_hier_dual_reverse":
+        from lerobot.policies.act_hier_dual_reverse.modeling_act import ACTHierDualReversePolicy
+
+        return ACTHierDualReversePolicy
+    elif name == "act_hier3":
+        from lerobot.policies.act_hier3.modeling_act import ACTHier3Policy
+
+        return ACTHier3Policy
+    elif name == "act_hier3_reverse":
+        from lerobot.policies.act_hier3_reverse.modeling_act import ACTHier3ReversePolicy
+
+        return ACTHier3ReversePolicy
+    elif name == "act_hier3_dual":
+        from lerobot.policies.act_hier3_dual.modeling_act import ACTHier3DualPolicy
+
+        return ACTHier3DualPolicy
+    elif name == "act_hier3_dual_reverse":
+        from lerobot.policies.act_hier3_dual_reverse.modeling_act import ACTHier3DualReversePolicy
+
+        return ACTHier3DualReversePolicy
     elif name == "vqbet":
         from lerobot.policies.vqbet.modeling_vqbet import VQBeTPolicy
 
@@ -114,12 +134,20 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return ACTSamdooConfig(**kwargs)
     elif policy_type == "act_hier":
         return ACTHierConfig(**kwargs)
-    elif policy_type == "act_hier3":
-        return ACTHier3Config(**kwargs)
-    elif policy_type == "act_hier3_dual":
-        return ACTHier3DualConfig(**kwargs)
+    elif policy_type == "act_hier_reverse":
+        return ACTHierReverseConfig(**kwargs)
     elif policy_type == "act_hier_dual":
         return ACTHierDualConfig(**kwargs)
+    elif policy_type == "act_hier_dual_reverse":
+        return ACTHierDualReverseConfig(**kwargs)
+    elif policy_type == "act_hier3":
+        return ACTHier3Config(**kwargs)
+    elif policy_type == "act_hier3_reverse":
+        return ACTHier3ReverseConfig(**kwargs)
+    elif policy_type == "act_hier3_dual":
+        return ACTHier3DualConfig(**kwargs)
+    elif policy_type == "act_hier3_dual_reverse":
+        return ACTHier3DualReverseConfig(**kwargs)
     elif policy_type == "vqbet":
         return VQBeTConfig(**kwargs)
     elif policy_type == "pi0":
