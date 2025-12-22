@@ -348,6 +348,8 @@ class ACT(nn.Module):
                 encoder_in_tokens.extend(list(cam_features))
                 encoder_in_pos_embed.extend(list(cam_pos_embed))
 
+        # Expand 1D positional embeddings to the batch dimension so stacking works when B>1.
+        encoder_in_pos_embed = [pos.expand(-1, batch_size, -1) if pos.shape[1] == 1 else pos for pos in encoder_in_pos_embed]
         encoder_in_tokens = torch.stack(encoder_in_tokens, axis=0)
         encoder_in_pos_embed = torch.stack(encoder_in_pos_embed, axis=0)
 
