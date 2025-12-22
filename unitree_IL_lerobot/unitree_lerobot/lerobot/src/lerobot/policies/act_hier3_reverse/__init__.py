@@ -1,1 +1,1 @@
-"""Three-branch hierarchical ACT variant decoding hand -> arm -> waist."""
+"""Three-branch hierarchical ACT decoding hand -> arm -> waist."""

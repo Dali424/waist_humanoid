@@ -1,1 +1,1 @@
-"""Hierarchical ACT variant with arm/hand-to-waist decoder chaining."""
+"""Hierarchical ACT variant decoding arm/hand -> waist."""

@@ -1,1 +1,1 @@
-"""Dual cross-attention ACT variant decoding arm/hand -> waist."""
+"""Dual cross-attention ACT variant with arm/hand -> waist decoding."""

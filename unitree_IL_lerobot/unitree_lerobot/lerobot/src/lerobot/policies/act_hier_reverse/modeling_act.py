@@ -5,20 +5,13 @@
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-#
 #     http://www.apache.org/licenses/LICENSE-2.0
-#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Action Chunking Transformer Policy (arm/hand -> waist decoding)
-
-This is a reversed hierarchical variant of ACT:
-    - First decoder predicts arm and hand.
-    - Second decoder conditions on the first to predict waist.
-"""
+"""Action Chunking Transformer Policy (arm/hand -> waist)."""
 
 import math
 from collections import deque
@@ -35,16 +28,13 @@ from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.ops.misc import FrozenBatchNorm2d
 
 from lerobot.constants import ACTION, OBS_IMAGES
-from lerobot.policies.act_hier.configuration_act import ACTHierConfig
 from lerobot.policies.act_hier_reverse.configuration_act import ACTHierReverseConfig
 from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.pretrained import PreTrainedPolicy
 
 
 class ACTHierReversePolicy(PreTrainedPolicy):
-    """
-    Hierarchical ACT variant that predicts arm/hand first, then waist.
-    """
+    """Hierarchical ACT variant decoding arm/hand first, then waist."""
 
     config_class = ACTHierReverseConfig
     name = "act_hier_reverse"
@@ -93,7 +83,6 @@ class ACTHierReversePolicy(PreTrainedPolicy):
         ]
 
     def reset(self):
-        """This should be called whenever the environment is reset."""
         if self.config.temporal_ensemble_coeff is not None:
             self.temporal_ensembler.reset()
         else:
@@ -101,8 +90,7 @@ class ACTHierReversePolicy(PreTrainedPolicy):
 
     @torch.no_grad()
     def select_action(self, batch: dict[str, Tensor]) -> Tensor:
-        """Select a single action given environment observations."""
-        self.eval()  # keep policy in eval mode while queue is consumed
+        self.eval()
 
         if self.config.temporal_ensemble_coeff is not None:
             actions = self.predict_action_chunk(batch)
@@ -116,12 +104,11 @@ class ACTHierReversePolicy(PreTrainedPolicy):
 
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
-        """Predict a chunk of actions given environment observations."""
         self.eval()
 
         batch = self.normalize_inputs(batch)
         if self.config.image_features:
-            batch = dict(batch)  # shallow copy
+            batch = dict(batch)
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
 
         actions = self.model(batch)[0]
@@ -129,7 +116,6 @@ class ACTHierReversePolicy(PreTrainedPolicy):
         return actions
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
-        """Run the batch through the model and compute the loss for training or validation."""
         batch = self.normalize_inputs(batch)
         if self.config.image_features:
             batch = dict(batch)
@@ -164,37 +150,28 @@ class ACTTemporalEnsembler:
         self.reset()
 
     def reset(self):
-        """Resets the online computation variables."""
         self.ensembled_actions = None
         self.ensembled_actions_count = None
 
     def update(self, actions: Tensor) -> Tensor:
-        """
-        Takes a (batch, chunk_size, action_dim) sequence of actions, update the temporal ensemble for all
-        time steps, and pop/return the next batch of actions in the sequence.
-        """
         self.ensemble_weights = self.ensemble_weights.to(device=actions.device)
         self.ensemble_weights_cumsum = self.ensemble_weights_cumsum.to(device=actions.device)
-
         if self.ensembled_actions is None:
-            self.ensembled_actions = actions * self.ensemble_weights[None, :, None]
-            self.ensembled_actions_count = self.ensemble_weights_cumsum.clone()
+            self.ensembled_actions = actions.clone()
+            self.ensembled_actions_count = torch.ones(
+                (self.chunk_size, 1), dtype=torch.long, device=self.ensembled_actions.device
+            )
         else:
-            if self.ensembled_actions.shape[0] != actions.shape[0]:
-                raise ValueError(
-                    f"New actions must have same batch size ({actions.shape[0]}) as ensembled actions "
-                    f"({self.ensembled_actions.shape[0]})."
-                )
-            self.ensembled_actions = torch.cat(
-                [self.ensembled_actions, actions * self.ensemble_weights[None, :, None]], dim=1
-            )
+            self.ensembled_actions *= self.ensemble_weights_cumsum[self.ensembled_actions_count - 1]
+            self.ensembled_actions += actions[:, :-1] * self.ensemble_weights[self.ensembled_actions_count]
+            self.ensembled_actions /= self.ensemble_weights_cumsum[self.ensembled_actions_count]
+            self.ensembled_actions_count = torch.clamp(self.ensembled_actions_count + 1, max=self.chunk_size)
+            self.ensembled_actions = torch.cat([self.ensembled_actions, actions[:, -1:]], dim=1)
             self.ensembled_actions_count = torch.cat(
-                [self.ensembled_actions_count, self.ensemble_weights_cumsum], dim=0
+                [self.ensembled_actions_count, torch.ones_like(self.ensembled_actions_count[-1:])]
             )
-
-        ensembled_actions = self.ensembled_actions / self.ensembled_actions_count[:, None]
         action, self.ensembled_actions, self.ensembled_actions_count = (
-            ensembled_actions[:, 0],
+            self.ensembled_actions[:, 0],
             self.ensembled_actions[:, 1:],
             self.ensembled_actions_count[1:],
         )
@@ -202,9 +179,9 @@ class ACTTemporalEnsembler:
 
 
 class ACT(nn.Module):
-    """Action Chunking Transformer with reversed decoding (arm/hand -> waist)."""
+    """Action Chunking Transformer with reversed decoding order (arm/hand -> waist)."""
 
-    def __init__(self, config: ACTHierConfig):
+    def __init__(self, config: ACTHierReverseConfig):
         super().__init__()
         self.config = config
 
@@ -237,8 +214,8 @@ class ACT(nn.Module):
             self.backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
 
         self.encoder = ACTEncoder(config)
-        self.waist_decoder = ACTDecoder(config)
         self.arm_decoder = ACTDecoder(config)
+        self.waist_decoder = ACTDecoder(config)
 
         if self.config.robot_state_feature:
             self.encoder_robot_state_input_proj = nn.Linear(
@@ -254,7 +231,7 @@ class ACT(nn.Module):
                 backbone_model.fc.in_features, config.dim_model, kernel_size=1
             )
 
-        n_1d_tokens = 1  # latent
+        n_1d_tokens = 1
         if self.config.robot_state_feature:
             n_1d_tokens += 1
         if self.config.env_state_feature:
@@ -278,7 +255,7 @@ class ACT(nn.Module):
         self._reset_parameters()
 
     def _reset_parameters(self):
-        for p in chain(self.encoder.parameters(), self.waist_decoder.parameters(), self.arm_decoder.parameters()):
+        for p in chain(self.encoder.parameters(), self.arm_decoder.parameters(), self.waist_decoder.parameters()):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
         for head in (self.waist_head, self.arm_head, self.hand_head):
@@ -291,19 +268,24 @@ class ACT(nn.Module):
                 "actions must be provided when using the variational objective in training mode."
             )
 
-        batch_size = (
-            batch["observation.images"][0].shape[0] if "observation.images" in batch else batch["observation.environment_state"].shape[0]
-        )
+        if "observation.images" in batch:
+            batch_size = batch["observation.images"][0].shape[0]
+        else:
+            batch_size = batch["observation.environment_state"].shape[0]
 
         if self.config.use_vae and "action" in batch and self.training:
             cls_embed = einops.repeat(
                 self.vae_encoder_cls_embed.weight, "1 d -> b 1 d", b=batch_size
             )
             if self.config.robot_state_feature:
-                robot_state_embed = self.vae_encoder_robot_state_input_proj(batch["observation.state"]).unsqueeze(1)
+                robot_state_embed = self.vae_encoder_robot_state_input_proj(batch["observation.state"])
+                robot_state_embed = robot_state_embed.unsqueeze(1)
             action_embed = self.vae_encoder_action_input_proj(batch["action"])
-
-            vae_encoder_input = [cls_embed, action_embed] if not self.config.robot_state_feature else [cls_embed, robot_state_embed, action_embed]
+            vae_encoder_input = [cls_embed, action_embed] if not self.config.robot_state_feature else [
+                cls_embed,
+                robot_state_embed,
+                action_embed,
+            ]
             vae_encoder_input = torch.cat(vae_encoder_input, axis=1)
 
             pos_embed = self.vae_encoder_pos_enc.clone().detach()
@@ -348,17 +330,14 @@ class ACT(nn.Module):
                 encoder_in_tokens.extend(list(cam_features))
                 encoder_in_pos_embed.extend(list(cam_pos_embed))
 
-        # Expand 1D positional embeddings to the batch dimension so stacking works when B>1.
-        encoder_in_pos_embed = [pos.expand(-1, batch_size, -1) if pos.shape[1] == 1 else pos for pos in encoder_in_pos_embed]
         encoder_in_tokens = torch.stack(encoder_in_tokens, axis=0)
         encoder_in_pos_embed = torch.stack(encoder_in_pos_embed, axis=0)
-
         encoder_out = self.encoder(encoder_in_tokens, pos_embed=encoder_in_pos_embed)
 
         decoder_queries = self.decoder_in_template.expand(-1, batch_size, -1).type_as(encoder_in_pos_embed)
         decoder_pos = self.decoder_pos_embed.weight.unsqueeze(1)
 
-        # Stage 1: arm decoder (predict arm + hand together).
+        # Stage 1: decode arm/hand directly from encoder context.
         arm_dec_out = self.arm_decoder(
             decoder_queries,
             encoder_out,
@@ -370,7 +349,7 @@ class ACT(nn.Module):
         arm = self.arm_head(arm_dec_out)
         hand = self.hand_head(arm_dec_out)
 
-        # Stage 2: waist decoder conditioned on arm/hand tokens.
+        # Stage 2: decode waist conditioned on arm/hand latents.
         waist_memory = torch.cat([encoder_out, arm_tokens], dim=0)
         waist_memory_pos = torch.cat(
             [encoder_in_pos_embed.expand(-1, arm_tokens.shape[1], -1), torch.zeros_like(arm_tokens)], dim=0
@@ -396,9 +375,7 @@ class ACT(nn.Module):
 
 
 class ACTEncoder(nn.Module):
-    """Convenience module for running multiple encoder layers, maybe followed by normalization."""
-
-    def __init__(self, config: ACTHierConfig, is_vae_encoder: bool = False):
+    def __init__(self, config: ACTHierReverseConfig, is_vae_encoder: bool = False):
         super().__init__()
         self.is_vae_encoder = is_vae_encoder
         num_layers = config.n_vae_encoder_layers if self.is_vae_encoder else config.n_encoder_layers
@@ -415,10 +392,9 @@ class ACTEncoder(nn.Module):
 
 
 class ACTEncoderLayer(nn.Module):
-    def __init__(self, config: ACTHierConfig):
+    def __init__(self, config: ACTHierReverseConfig):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
-
         self.linear1 = nn.Linear(config.dim_model, config.dim_feedforward)
         self.dropout = nn.Dropout(config.dropout)
         self.linear2 = nn.Linear(config.dim_feedforward, config.dim_model)
@@ -436,8 +412,7 @@ class ACTEncoderLayer(nn.Module):
         if self.pre_norm:
             x = self.norm1(x)
         q = k = x if pos_embed is None else x + pos_embed
-        x = self.self_attn(q, k, value=x, key_padding_mask=key_padding_mask)
-        x = x[0]
+        x = self.self_attn(q, k, value=x, key_padding_mask=key_padding_mask)[0]
         x = skip + self.dropout1(x)
         if self.pre_norm:
             skip = x
@@ -453,38 +428,32 @@ class ACTEncoderLayer(nn.Module):
 
 
 class ACTDecoder(nn.Module):
-    def __init__(self, config: ACTHierConfig):
-        """Convenience module for running multiple decoder layers followed by normalization."""
+    def __init__(self, config: ACTHierReverseConfig):
         super().__init__()
         self.layers = nn.ModuleList([ACTDecoderLayer(config) for _ in range(config.n_decoder_layers)])
         self.norm = nn.LayerNorm(config.dim_model)
 
     def forward(
         self,
-        query_embed: Tensor,
-        memory: Tensor,
-        encoder_pos_embed: Tensor | None = None,
+        x: Tensor,
+        encoder_out: Tensor,
         decoder_pos_embed: Tensor | None = None,
-        key_padding_mask: Tensor | None = None,
+        encoder_pos_embed: Tensor | None = None,
     ) -> Tensor:
-        output = query_embed
         for layer in self.layers:
-            output = layer(
-                output,
-                memory,
-                encoder_pos_embed=encoder_pos_embed,
-                decoder_pos_embed=decoder_pos_embed,
-                key_padding_mask=key_padding_mask,
+            x = layer(
+                x, encoder_out, decoder_pos_embed=decoder_pos_embed, encoder_pos_embed=encoder_pos_embed
             )
-        output = self.norm(output)
-        return output
+        if self.norm is not None:
+            x = self.norm(x)
+        return x
 
 
 class ACTDecoderLayer(nn.Module):
-    def __init__(self, config: ACTHierConfig):
+    def __init__(self, config: ACTHierReverseConfig):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
-        self.cross_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
+        self.multihead_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
 
         self.linear1 = nn.Linear(config.dim_model, config.dim_feedforward)
         self.dropout = nn.Dropout(config.dropout)
@@ -493,7 +462,6 @@ class ACTDecoderLayer(nn.Module):
         self.norm1 = nn.LayerNorm(config.dim_model)
         self.norm2 = nn.LayerNorm(config.dim_model)
         self.norm3 = nn.LayerNorm(config.dim_model)
-
         self.dropout1 = nn.Dropout(config.dropout)
         self.dropout2 = nn.Dropout(config.dropout)
         self.dropout3 = nn.Dropout(config.dropout)
@@ -501,85 +469,92 @@ class ACTDecoderLayer(nn.Module):
         self.activation = get_activation_fn(config.feedforward_activation)
         self.pre_norm = config.pre_norm
 
+    def maybe_add_pos_embed(self, tensor: Tensor, pos_embed: Tensor | None) -> Tensor:
+        return tensor if pos_embed is None else tensor + pos_embed
+
     def forward(
         self,
-        tgt: Tensor,
-        memory: Tensor,
-        encoder_pos_embed: Tensor | None = None,
+        x: Tensor,
+        encoder_out: Tensor,
         decoder_pos_embed: Tensor | None = None,
-        key_padding_mask: Tensor | None = None,
+        encoder_pos_embed: Tensor | None = None,
     ) -> Tensor:
-        skip = tgt
+        skip = x
         if self.pre_norm:
-            tgt = self.norm1(tgt)
-        q = k = tgt if decoder_pos_embed is None else tgt + decoder_pos_embed
-        tgt = self.self_attn(q, k, value=tgt, key_padding_mask=key_padding_mask)[0]
-        tgt = skip + self.dropout1(tgt)
+            x = self.norm1(x)
+        q = k = self.maybe_add_pos_embed(x, decoder_pos_embed)
+        x = self.self_attn(q, k, value=x)[0]
+        x = skip + self.dropout1(x)
         if self.pre_norm:
-            skip = tgt
-            tgt = self.norm2(tgt)
+            skip = x
+            x = self.norm2(x)
         else:
-            tgt = self.norm1(tgt)
-            skip = tgt
-        q = tgt if decoder_pos_embed is None else tgt + decoder_pos_embed
-        k = memory if encoder_pos_embed is None else memory + encoder_pos_embed
-        tgt = self.cross_attn(query=q, key=k, value=memory, key_padding_mask=key_padding_mask)[0]
-        tgt = skip + self.dropout2(tgt)
+            x = self.norm1(x)
+            skip = x
+        x = self.multihead_attn(
+            query=self.maybe_add_pos_embed(x, decoder_pos_embed),
+            key=self.maybe_add_pos_embed(encoder_out, encoder_pos_embed),
+            value=encoder_out,
+        )[0]
+        x = skip + self.dropout2(x)
         if self.pre_norm:
-            skip = tgt
-            tgt = self.norm3(tgt)
+            skip = x
+            x = self.norm3(x)
         else:
-            tgt = self.norm2(tgt)
-            skip = tgt
-        tgt = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
-        tgt = skip + self.dropout3(tgt)
+            x = self.norm2(x)
+            skip = x
+        x = self.linear2(self.dropout(self.activation(self.linear1(x))))
+        x = skip + self.dropout3(x)
         if not self.pre_norm:
-            tgt = self.norm3(tgt)
-        return tgt
+            x = self.norm3(x)
+        return x
+
+
+def create_sinusoidal_pos_embedding(num_positions: int, dimension: int) -> Tensor:
+    def get_position_angle_vec(position):
+        return [position / np.power(10000, 2 * (hid_j // 2) / dimension) for hid_j in range(dimension)]
+
+    sinusoid_table = np.array([get_position_angle_vec(pos_i) for pos_i in range(num_positions)])
+    sinusoid_table[:, 0::2] = np.sin(sinusoid_table[:, 0::2])
+    sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])
+    return torch.from_numpy(sinusoid_table).float()
 
 
 class ACTSinusoidalPositionEmbedding2d(nn.Module):
-    """2D sinusoidal positional embeddings."""
-
-    def __init__(self, embed_dim: int = 64, temperature: int = 10000):
+    def __init__(self, dimension: int):
         super().__init__()
-        self.embed_dim = embed_dim
-        self.temperature = temperature
+        self.dimension = dimension
+        self._two_pi = 2 * math.pi
+        self._eps = 1e-6
+        self._temperature = 10000
 
     def forward(self, x: Tensor) -> Tensor:
-        not_mask = torch.ones(x.shape[0], x.shape[2], x.shape[3], device=x.device)
-        y_embed = not_mask.cumsum(1, dtype=torch.float32)
-        x_embed = not_mask.cumsum(2, dtype=torch.float32)
+        not_mask = torch.ones_like(x[0, :1])
+        y_range = not_mask.cumsum(1, dtype=torch.float32)
+        x_range = not_mask.cumsum(2, dtype=torch.float32)
 
-        dim_t = torch.arange(self.embed_dim, device=x.device, dtype=torch.float32)
-        dim_t = self.temperature ** (2 * torch.div(dim_t, 2, rounding_mode="floor") / self.embed_dim)
+        y_range = y_range / (y_range[:, -1:, :] + self._eps) * self._two_pi
+        x_range = x_range / (x_range[:, :, -1:] + self._eps) * self._two_pi
 
-        pos_x = x_embed[:, :, :, None] / dim_t
-        pos_y = y_embed[:, :, :, None] / dim_t
+        inverse_frequency = self._temperature ** (
+            2 * (torch.arange(self.dimension, dtype=torch.float32, device=x.device) // 2) / self.dimension
+        )
 
-        pos_x = torch.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4).flatten(3)
-        pos_y = torch.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4).flatten(3)
-        pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2)
-        return pos
+        x_range = x_range.unsqueeze(-1) / inverse_frequency
+        y_range = y_range.unsqueeze(-1) / inverse_frequency
+
+        pos_embed_x = torch.stack((x_range[..., 0::2].sin(), x_range[..., 1::2].cos()), dim=-1).flatten(3)
+        pos_embed_y = torch.stack((y_range[..., 0::2].sin(), y_range[..., 1::2].cos()), dim=-1).flatten(3)
+        pos_embed = torch.cat((pos_embed_y, pos_embed_x), dim=3).permute(0, 3, 1, 2)
+
+        return pos_embed
 
 
 def get_activation_fn(activation: str) -> Callable:
-    """Return an activation function given a string."""
     if activation == "relu":
         return F.relu
     if activation == "gelu":
         return F.gelu
     if activation == "glu":
         return F.glu
-    raise RuntimeError(f"activation should be relu/gelu/glu, not {activation}.")
-
-
-def create_sinusoidal_pos_embedding(num_positions: int, dimension: int) -> Tensor:
-    """Creates a sinusoidal positional embedding as described in Vaswani et al. (2017)."""
-    inv_freq = 1.0 / (
-        10000 ** (torch.arange(0, dimension, 2, dtype=torch.float32) / dimension)
-    )  # (D/2,)
-    pos = torch.arange(num_positions, dtype=torch.float32)  # (num_positions,)
-    sinusoid_inp = torch.einsum("i , j -> i j", pos, inv_freq)  # (num_positions, D/2)
-    pos_emb = torch.cat((sinusoid_inp.sin(), sinusoid_inp.cos()), dim=1)  # (num_positions, D)
-    return pos_emb
+    raise ValueError(f"{activation} is not a supported activation function")

@@ -37,9 +37,7 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 
 
 class ACTHierDualReversePolicy(PreTrainedPolicy):
-    """
-    Dual cross-attention ACT variant that predicts arm/hand first, then waist.
-    """
+    """Dual cross-attn ACT variant decoding arm/hand first, then waist."""
 
     config_class = ACTHierDualReverseConfig
     name = "act_hier_dual_reverse"
@@ -123,7 +121,6 @@ class ACTHierDualReversePolicy(PreTrainedPolicy):
         if self.config.image_features:
             batch = dict(batch)
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
-
         batch = self.normalize_targets(batch)
         actions_hat, (mu_hat, log_sigma_x2_hat) = self.model(batch)
 
@@ -182,7 +179,7 @@ class ACTTemporalEnsembler:
 
 
 class ACT(nn.Module):
-    """Action Chunking Transformer with dual cross-attn decoding (arm/hand -> waist)."""
+    """Dual cross-attention ACT with reversed decoding (arm/hand -> waist)."""
 
     def __init__(self, config: ACTHierDualConfig):
         super().__init__()
@@ -330,12 +327,13 @@ class ACT(nn.Module):
                 cam_features = self.backbone(img)["feature_map"]
                 cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_features).to(dtype=cam_features.dtype)
                 cam_features = self.encoder_img_feat_input_proj(cam_features)
+
                 cam_features = einops.rearrange(cam_features, "b c h w -> (h w) b c")
                 cam_pos_embed = einops.rearrange(cam_pos_embed, "b c h w -> (h w) b c")
+
                 encoder_in_tokens.extend(list(cam_features))
                 encoder_in_pos_embed.extend(list(cam_pos_embed))
 
-        encoder_in_pos_embed = [pos.expand(-1, batch_size, -1) if pos.shape[1] == 1 else pos for pos in encoder_in_pos_embed]
         encoder_in_tokens = torch.stack(encoder_in_tokens, axis=0)
         encoder_in_pos_embed = torch.stack(encoder_in_pos_embed, axis=0)
         encoder_out = self.encoder(encoder_in_tokens, pos_embed=encoder_in_pos_embed)
@@ -343,7 +341,7 @@ class ACT(nn.Module):
         decoder_queries = self.decoder_in_template.expand(-1, batch_size, -1).type_as(encoder_in_pos_embed)
         decoder_pos = self.decoder_pos_embed.weight.unsqueeze(1)
 
-        # Stage 1: arm decoder (cross-attn encoder only).
+        # Stage 1: arm decoder (encoder-only).
         arm_dec_out = self.arm_decoder(
             decoder_queries,
             encoder_out,
@@ -433,7 +431,7 @@ class ACTEncoderLayer(nn.Module):
 
 
 class ACTDualDecoder(nn.Module):
-    """Decoder with dual cross-attention: encoder features then previous decoder outputs."""
+    """Decoder with dual cross-attention: encoder features then previous decoder outputs (optional)."""
 
     def __init__(self, config: ACTHierDualConfig):
         super().__init__()
