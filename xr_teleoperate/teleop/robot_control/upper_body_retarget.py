@@ -3,7 +3,7 @@ import numpy as np
 
 class UpperBodyRetarget:
     """
-    Map head motion/orientation to waist yaw + pitch.
+    Map head motion/orientation to waist yaw + pitch + roll.
 
     - Forward (팔 뻗는 쪽): measured along robot Z in this setup.
       Use baseline z0 and forward_delta = (z0 - z_now) so moving forward
@@ -12,28 +12,31 @@ class UpperBodyRetarget:
       max(0, y0 - y_now) so only downward contributes.
     - Yaw: extracted from head rotation around robot Z axis, relative to
       initial head orientation.
-    - Waist roll fixed to 0 for stability.
+    - Waist roll from head roll around robot X axis (relative to initial head orientation).
     """
 
     def __init__(self, height: float = 1.60, waist_height_ratio: float = 0.530,
                  pitch_gain_forward: float = 6.0, pitch_gain_down: float = 6.0,
-                 yaw_gain: float = 1.0,
+                 yaw_gain: float = 1.0, roll_gain: float = 1.0,
                  clip: float = np.pi / 6,
                  deadzone_forward: float = 0.0, deadzone_down: float = 0.0,
-                 deadzone_yaw: float = 0.0):
+                 deadzone_yaw: float = 0.0, deadzone_roll: float = 0.0):
         self.height = float(height)
         self.waist_height_ratio = float(waist_height_ratio)
         self.waist_height = self.height * self.waist_height_ratio
         self.pitch_gain_forward = float(pitch_gain_forward)
         self.pitch_gain_down = float(pitch_gain_down)
         self.yaw_gain = float(yaw_gain)
+        self.roll_gain = float(roll_gain)
         self.clip = float(clip)
         self.deadzone_forward = float(deadzone_forward)
         self.deadzone_down = float(deadzone_down)
         self.deadzone_yaw = float(deadzone_yaw)
+        self.deadzone_roll = float(deadzone_roll)
         self._z0 = None  # forward baseline
         self._y0 = None  # height baseline
         self._yaw0 = None  # head yaw baseline (rad)
+        self._roll0 = None  # head roll baseline (rad)
 
     @staticmethod
     def _extract_yaw_from_rot(mat: np.ndarray) -> float:
@@ -48,6 +51,18 @@ class UpperBodyRetarget:
             return 0.0
         # atan2 handles normalization internally
         return float(np.arctan2(R[1, 0], R[0, 0]))
+
+    @staticmethod
+    def _extract_roll_from_rot(mat: np.ndarray) -> float:
+        """
+        Extract roll (rotation around robot X) from a 4x4 SE(3) pose matrix.
+
+        Uses standard ZYX convention: R = Rz(yaw) * Ry(pitch) * Rx(roll).
+        """
+        R = mat[:3, :3]
+        if not np.isfinite(R).all():
+            return 0.0
+        return float(np.arctan2(R[2, 1], R[2, 2]))
 
     def solve_upper_body_angles(self, head: np.ndarray):
         """
@@ -68,8 +83,11 @@ class UpperBodyRetarget:
             self._y0 = y_now
         # Baseline head yaw from first valid frame
         yaw_now = self._extract_yaw_from_rot(head)
+        roll_now = self._extract_roll_from_rot(head)
         if self._yaw0 is None:
             self._yaw0 = yaw_now
+        if self._roll0 is None:
+            self._roll0 = roll_now
 
         forward_delta = (self._z0 - z_now)
         down_delta = max(0.0, self._y0 - y_now)
@@ -85,10 +103,16 @@ class UpperBodyRetarget:
         if abs(yaw_delta) < self.deadzone_yaw:
             yaw_delta = 0.0
 
+        roll_delta = roll_now - self._roll0
+        roll_delta = (roll_delta + np.pi) % (2 * np.pi) - np.pi
+        if abs(roll_delta) < self.deadzone_roll:
+            roll_delta = 0.0
+
         waist_pitch = self.pitch_gain_forward * forward_delta + \
                       self.pitch_gain_down * down_delta
         waist_yaw = self.yaw_gain * yaw_delta
+        waist_roll = self.roll_gain * roll_delta
 
-        q_upper_body = np.array([waist_yaw, waist_pitch, 0.0], dtype=float)
+        q_upper_body = np.array([waist_yaw, waist_pitch, waist_roll], dtype=float)
         q_upper_body = np.clip(q_upper_body, -self.clip, self.clip)
         return q_upper_body

@@ -24,9 +24,9 @@ from tasks.common_scene.base_scene_pickplace_redblock import TableRedBlockSceneC
 # Spawn range (relative offset from object's default pose)
 
 # SPAWN_X_RANGE = (0.45, 0.55)   # shift strongly to robot left
-SPAWN_X_RANGE = (-0.32, -0.37)   # shift strongly to robot right
+SPAWN_X_RANGE = (-0.30, -0.40)   # shift closer to robot right side
 
-SPAWN_Y_RANGE = (-0.12, -0.17)     # bring object closer in front/back distance
+SPAWN_Y_RANGE = (-0.115, -0.015)     # halfway back toward previous forward distance
 
 # Base object's default position in the base scene
 OBJ_BASE_X, OBJ_BASE_Y, OBJ_BASE_Z = (-4.25, -4.03, 0.84)

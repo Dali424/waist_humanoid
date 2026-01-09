@@ -6,36 +6,22 @@ contains various task implementations for the G1 robot, such as pick and place, 
 """
 
 # use relative import
-from . import pick_place_cylinder_g1_29dof_dex3
-from . import pick_place_cylinder_g1_29dof_dex1
 from . import pick_place_cylinder_g1_29dof_inspire
 
-from . import pick_place_redblock_g1_29dof_dex1
-from . import pick_place_redblock_g1_29dof_dex3
-from . import stack_rgyblock_g1_29dof_dex1
-from . import stack_rgyblock_g1_29dof_dex3
 from . import stack_rgyblock_g1_29dof_inspire
-from . import pick_redblock_into_drawer_g1_29dof_dex1
-from . import pick_redblock_into_drawer_g1_29dof_dex3
 from . import pick_place_redblock_g1_29dof_inspire
 from . import pick_place_redblock_g1_29dof_inspire_farlean
 from . import pick_place_redblock_g1_29dof_inspire_side
-from . import move_cylinder_g1_29dof_dex1_wholebody
-from . import move_cylinder_g1_29dof_dex3_wholebody
+from . import pick_place_bigbox_g1_29dof_inspire_rightleft
 from . import move_cylinder_g1_29dof_inspire_wholebody
 
 # export all modules
 __all__ = [
-        "pick_place_cylinder_g1_29dof_dex3", "pick_place_cylinder_g1_29dof_dex1", 
-        "pick_place_redblock_g1_29dof_dex1", "pick_place_redblock_g1_29dof_dex3", 
-        "stack_rgyblock_g1_29dof_dex1", "stack_rgyblock_g1_29dof_dex3", 
         "stack_rgyblock_g1_29dof_inspire",
-        "pick_redblock_into_drawer_g1_29dof_dex1","pick_redblock_into_drawer_g1_29dof_dex3",
         "pick_place_redblock_g1_29dof_inspire",
         "pick_place_redblock_g1_29dof_inspire_farlean",
         "pick_place_redblock_g1_29dof_inspire_side",
+        "pick_place_bigbox_g1_29dof_inspire_rightleft",
         "pick_place_cylinder_g1_29dof_inspire",
-        "move_cylinder_g1_29dof_dex1_wholebody",
-        "move_cylinder_g1_29dof_dex3_wholebody",
         "move_cylinder_g1_29dof_inspire_wholebody"
 ]

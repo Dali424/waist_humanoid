@@ -1,7 +1,7 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
-# License: Apache License, Version 2.0  
+# License: Apache License, Version 2.0
+import os
 import torch
-from dataclasses import MISSING
 
 import isaaclab.envs.mdp as base_mdp
 from isaaclab.envs import ManagerBasedRLEnvCfg
@@ -12,7 +12,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.utils import configclass
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 import isaaclab.sim as sim_utils
 
 from . import mdp
@@ -20,35 +20,69 @@ from tasks.common_config import G1RobotPresets, CameraPresets  # isort: skip
 from tasks.common_event.event_manager import SimpleEvent, SimpleEventManager
 from tasks.common_scene.base_scene_pickplace_redblock import TableRedBlockSceneCfg
 
+project_root = os.environ.get("PROJECT_ROOT")
 
-# Spawn range (relative offset from object's default pose)
-#SPAWN_X_RANGE = (-0.14, 0.24)
-
-#SPAWN_X_RANGE = (0.10, 0.24)   # left hand
-SPAWN_X_RANGE = (-0.12, -0.02)    # right hand
-
-# Ensure ascending order for size computation
-SPAWN_Y_RANGE = (-0.275, -0.175)  # further away from robot to encourage forward bend
+# Big box settings (body-sized so both arms are needed)
+BOX_SIZE = (0.21, 0.154, 0.175)
+BOX_MASS = 0.30
+TABLE_TOP_Z = 0.81
 
 # Base object's default position in the base scene
-OBJ_BASE_X, OBJ_BASE_Y, OBJ_BASE_Z = (-4.25, -4.03, 0.84)
+OBJ_BASE_X, OBJ_BASE_Y = (-4.25, -4.03)
+OBJ_BASE_Z = TABLE_TOP_Z + 0.5 * BOX_SIZE[2]
+
+# Spawn range (relative offset from object's default pose)
+RIGHT_SPAWN_CENTER_OFFSET_X = -0.35
+RIGHT_SPAWN_CENTER_OFFSET_Y = -0.15
+SPAWN_HALF_RANGE = 0.05  # about 10 cm total randomization
+SPAWN_X_RANGE = (
+    RIGHT_SPAWN_CENTER_OFFSET_X - SPAWN_HALF_RANGE,
+    RIGHT_SPAWN_CENTER_OFFSET_X + SPAWN_HALF_RANGE,
+)
+SPAWN_Y_RANGE = (
+    RIGHT_SPAWN_CENTER_OFFSET_Y - SPAWN_HALF_RANGE,
+    RIGHT_SPAWN_CENTER_OFFSET_Y + SPAWN_HALF_RANGE,
+)
 
 # Precompute spawn area visualization transform and size (module-level constants)
 SPAWN_CENTER_X = OBJ_BASE_X + 0.5 * (SPAWN_X_RANGE[0] + SPAWN_X_RANGE[1])
 SPAWN_CENTER_Y = OBJ_BASE_Y + 0.5 * (SPAWN_Y_RANGE[0] + SPAWN_Y_RANGE[1])
 SPAWN_CENTER_Z = OBJ_BASE_Z - 0.02  # slightly above table top
 # Ensure strictly positive spawn area extents to avoid degenerate transforms.
-SPAWN_SIZE_X = (SPAWN_X_RANGE[1] - SPAWN_X_RANGE[0])
-SPAWN_SIZE_Y = (SPAWN_Y_RANGE[1] - SPAWN_Y_RANGE[0])
-SPAWN_SIZE_Z = 0.00201
+SPAWN_SIZE_X = max(1e-3, SPAWN_X_RANGE[1] - SPAWN_X_RANGE[0])
+SPAWN_SIZE_Y = max(1e-3, SPAWN_Y_RANGE[1] - SPAWN_Y_RANGE[0])
+SPAWN_SIZE_Z = 0.01
 
 # Toggle for visualizing the spawn range on the table.
 SHOW_SPAWN_AREA = False
 
+# Target (success) area visualization for left table area
+LEFT_TARGET_CENTER_OFFSET_X = 0.35
+LEFT_TARGET_CENTER_OFFSET_Y = -0.15
+TARGET_HALF_X = 0.12
+TARGET_HALF_Y = 0.12
+TARGET_MIN_X = OBJ_BASE_X + LEFT_TARGET_CENTER_OFFSET_X - TARGET_HALF_X
+TARGET_MAX_X = OBJ_BASE_X + LEFT_TARGET_CENTER_OFFSET_X + TARGET_HALF_X
+TARGET_MIN_Y = OBJ_BASE_Y + LEFT_TARGET_CENTER_OFFSET_Y - TARGET_HALF_Y
+TARGET_MAX_Y = OBJ_BASE_Y + LEFT_TARGET_CENTER_OFFSET_Y + TARGET_HALF_Y
+TARGET_MIN_Z = OBJ_BASE_Z - 0.05
+TARGET_MAX_Z = OBJ_BASE_Z + 0.05
+TARGET_CENTER = (
+    0.5 * (TARGET_MIN_X + TARGET_MAX_X),
+    0.5 * (TARGET_MIN_Y + TARGET_MAX_Y),
+    0.5 * (TARGET_MIN_Z + TARGET_MAX_Z),
+)
+TARGET_SIZE = (
+    max(1e-3, TARGET_MAX_X - TARGET_MIN_X),
+    max(1e-3, TARGET_MAX_Y - TARGET_MIN_Y),
+    max(1e-3, TARGET_MAX_Z - TARGET_MIN_Z),
+)
+SHOW_TARGET_AREA = False
+
 
 @configclass
 class ObjectTableSceneCfg(TableRedBlockSceneCfg):
-    """Scene: G1 + red block + table with spawn area visualization."""
+    """Scene: G1 + big red box + table with spawn/target visualization."""
 
     robot: ArticulationCfg = G1RobotPresets.g1_29dof_inspire_base_fix(
         init_pos=(-4.2, -3.7, 0.76), init_rot=(0.7071, 0, 0, -0.7071)
@@ -58,6 +92,48 @@ class ObjectTableSceneCfg(TableRedBlockSceneCfg):
     front_camera = CameraPresets.g1_front_camera()
     left_wrist_camera = CameraPresets.left_inspire_wrist_camera()
     right_wrist_camera = CameraPresets.right_inspire_wrist_camera()
+
+    # Override table USD for this task
+    packing_table = AssetBaseCfg(
+        prim_path="/World/envs/env_.*/PackingTable",
+        init_state=AssetBaseCfg.InitialStateCfg(pos=[-4.3, -4.2, -0.2], rot=[1.0, 0.0, 0.0, 0.0]),
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=f"{project_root}/assets/objects/table_with_leftyellowbox.usd",
+        ),
+    )
+
+    # Override object with a larger box
+    object: RigidObjectCfg = RigidObjectCfg(
+        prim_path="/World/envs/env_.*/Object",
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=[OBJ_BASE_X, OBJ_BASE_Y, OBJ_BASE_Z],
+            rot=[0.9659, 0.0, 0.0, -0.2588],
+        ),
+        spawn=sim_utils.CuboidCfg(
+            size=BOX_SIZE,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=False,
+                retain_accelerations=False,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=BOX_MASS),
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                collision_enabled=True,
+                contact_offset=0.01,
+                rest_offset=0.0,
+            ),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.69, 0.55, 0.34),
+                metallic=0,
+            ),
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                friction_combine_mode="max",
+                restitution_combine_mode="min",
+                static_friction=10,
+                dynamic_friction=1.5,
+                restitution=0.01,
+            ),
+        ),
+    )
 
     # Optional spawn-area visualization (only created when SHOW_SPAWN_AREA is True)
     if SHOW_SPAWN_AREA:
@@ -72,6 +148,21 @@ class ObjectTableSceneCfg(TableRedBlockSceneCfg):
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
                 collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
                 visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 0.0), opacity=1.0),
+            ),
+        )
+    # Optional target-area visualization (helps to see success zone)
+    if SHOW_TARGET_AREA:
+        target_area: AssetBaseCfg = AssetBaseCfg(
+            prim_path="/World/envs/env_.*/TargetArea",
+            init_state=AssetBaseCfg.InitialStateCfg(
+                pos=list(TARGET_CENTER),
+                rot=[1.0, 0.0, 0.0, 0.0],
+            ),
+            spawn=sim_utils.CuboidCfg(
+                size=TARGET_SIZE,
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+                collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.6, 1.0), opacity=0.4),
             ),
         )
 
@@ -103,7 +194,18 @@ class TerminationsCfg:
 
 @configclass
 class RewardsCfg:
-    reward = RewTerm(func=mdp.compute_reward, weight=1.0)
+    reward = RewTerm(
+        func=mdp.compute_reward,
+        weight=1.0,
+        params={
+            "post_min_x": TARGET_MIN_X,
+            "post_max_x": TARGET_MAX_X,
+            "post_min_y": TARGET_MIN_Y,
+            "post_max_y": TARGET_MAX_Y,
+            "post_min_height": TARGET_MIN_Z,
+            "post_max_height": TARGET_MAX_Z,
+        },
+    )
 
 
 @configclass
@@ -120,7 +222,7 @@ class EventCfg:
 
 
 @configclass
-class PickPlaceG129InspireFarSpawnEnvCfg(ManagerBasedRLEnvCfg):
+class PickPlaceG129InspireRightLeftBigBoxEnvCfg(ManagerBasedRLEnvCfg):
     scene: ObjectTableSceneCfg = ObjectTableSceneCfg(num_envs=1, env_spacing=2.5, replicate_physics=True)
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -148,7 +250,7 @@ class PickPlaceG129InspireFarSpawnEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physx.num_velocity_iterations = 4
 
         self.event_manager = SimpleEventManager()
-        # local reset with far-spawn ranges
+        # local reset with right-spawn ranges
         self.event_manager.register(
             "reset_object_self",
             SimpleEvent(

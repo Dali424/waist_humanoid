@@ -186,7 +186,7 @@ def is_success(
                 reward_stats["reward_sum"] += 1
         sim_reward_subscriber.reset_data()
     # success
-    if reward_stats["reward_sum"] >= 25:
+    if reward_stats["reward_sum"] >= 10:
         process_data_save(episode_writer, "success")
         logger_mp.info(
             f"Episode {reward_stats['episode_num']} finished with reward {reward_stats['reward_sum']},save data..."
