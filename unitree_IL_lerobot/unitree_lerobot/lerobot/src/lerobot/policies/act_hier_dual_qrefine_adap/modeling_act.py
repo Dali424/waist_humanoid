@@ -438,7 +438,11 @@ class ACT(nn.Module):
 
         action_dim = self.config.action_feature.shape[0]
         actions = torch.zeros(
-            arm_latent.shape[0], arm_latent.shape[1], action_dim, device=arm_latent.device, dtype=arm_latent.dtype
+            arm_tokens_t.shape[0],
+            arm_tokens_t.shape[1],
+            action_dim,
+            device=arm_latent.device,
+            dtype=arm_latent.dtype,
         )
         actions[:, :, self.config.waist_indices] = waist
         actions[:, :, self.config.arm_indices] = arm
