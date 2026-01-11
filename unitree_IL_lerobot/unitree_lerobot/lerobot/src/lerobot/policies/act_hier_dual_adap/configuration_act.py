@@ -16,10 +16,10 @@
 from dataclasses import dataclass
 
 from lerobot.configs.policies import PreTrainedConfig
-from lerobot.policies.act_hier3.configuration_act import ACTHier3Config
+from lerobot.policies.act_hier_dual.configuration_act import ACTHierDualConfig
 
 
-@PreTrainedConfig.register_subclass("act_hier3_dual")
+@PreTrainedConfig.register_subclass("act_hier_dual_adap")
 @dataclass
-class ACTHier3DualConfig(ACTHier3Config):
-    """Three-branch hierarchical ACT variant with dual cross-attention in each decoder."""
+class ACTHierDualAdapConfig(ACTHierDualConfig):
+    """Adaptive-gated ACT hier dual policy."""

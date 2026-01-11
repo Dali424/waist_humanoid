@@ -16,10 +16,10 @@
 from dataclasses import dataclass
 
 from lerobot.configs.policies import PreTrainedConfig
-from lerobot.policies.act_hier3_dual.configuration_act import ACTHier3DualConfig
+from lerobot.policies.act_hier_dual.configuration_act import ACTHierDualConfig
 
 
-@PreTrainedConfig.register_subclass("act_hier3_dual_reverse")
+@PreTrainedConfig.register_subclass("act_hier_dual_qrefine")
 @dataclass
-class ACTHier3DualReverseConfig(ACTHier3DualConfig):
-    """Three-branch dual cross-attn ACT decoding hand -> arm -> waist."""
+class ACTHierDualQRefineConfig(ACTHierDualConfig):
+    """Q-refine ACT hier dual policy."""

@@ -5,7 +5,9 @@
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -14,10 +16,10 @@
 from dataclasses import dataclass
 
 from lerobot.configs.policies import PreTrainedConfig
-from lerobot.policies.act_hier3.configuration_act import ACTHier3Config
+from lerobot.policies.act_hier_dual.configuration_act import ACTHierDualConfig
 
 
-@PreTrainedConfig.register_subclass("act_hier3_reverse")
+@PreTrainedConfig.register_subclass("act_hier_dual_qrefine_adap")
 @dataclass
-class ACTHier3ReverseConfig(ACTHier3Config):
-    """Three-branch hierarchical ACT decoding hand -> arm -> waist."""
+class ACTHierDualQRefineAdapConfig(ACTHierDualConfig):
+    """Adaptive Q-refine ACT hier dual policy."""
