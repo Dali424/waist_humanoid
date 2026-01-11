@@ -1,5 +1,6 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 # License: Apache License, Version 2.0
+import math
 import os
 import torch
 
@@ -26,6 +27,7 @@ project_root = os.environ.get("PROJECT_ROOT")
 BOX_SIZE = (0.21, 0.154, 0.175)
 BOX_MASS = 0.30
 TABLE_TOP_Z = 0.81
+TABLE_BASE_X, TABLE_BASE_Y = (-4.3, -4.2)
 
 # Base object's default position in the base scene
 OBJ_BASE_X, OBJ_BASE_Y = (-4.25, -4.03)
@@ -56,20 +58,28 @@ SPAWN_SIZE_Z = 0.01
 # Toggle for visualizing the spawn range on the table.
 SHOW_SPAWN_AREA = False
 
-# Target (success) area visualization for left table area
-LEFT_TARGET_CENTER_OFFSET_X = 0.35
-LEFT_TARGET_CENTER_OFFSET_Y = -0.15
-TARGET_HALF_X = 0.12
-TARGET_HALF_Y = 0.12
-TARGET_MIN_X = OBJ_BASE_X + LEFT_TARGET_CENTER_OFFSET_X - TARGET_HALF_X
-TARGET_MAX_X = OBJ_BASE_X + LEFT_TARGET_CENTER_OFFSET_X + TARGET_HALF_X
-TARGET_MIN_Y = OBJ_BASE_Y + LEFT_TARGET_CENTER_OFFSET_Y - TARGET_HALF_Y
-TARGET_MAX_Y = OBJ_BASE_Y + LEFT_TARGET_CENTER_OFFSET_Y + TARGET_HALF_Y
+# Target (success) area visualization for left table area.
+# Offsets are relative to the table origin to better align with the yellow marker.
+LEFT_TARGET_CENTER_OFFSET_X = 0.45
+LEFT_TARGET_CENTER_OFFSET_Y = 0.05
+TARGET_HALF_SCALE = 0.5
+TARGET_HALF_X = 0.12 * TARGET_HALF_SCALE
+TARGET_HALF_Y = 0.12 * TARGET_HALF_SCALE
+TARGET_CENTER_X = TABLE_BASE_X + LEFT_TARGET_CENTER_OFFSET_X
+TARGET_CENTER_Y = TABLE_BASE_Y + LEFT_TARGET_CENTER_OFFSET_Y
+TARGET_MIN_X = TARGET_CENTER_X - TARGET_HALF_X
+TARGET_MAX_X = TARGET_CENTER_X + TARGET_HALF_X
+TARGET_MIN_Y = TARGET_CENTER_Y - TARGET_HALF_Y
+TARGET_MAX_Y = TARGET_CENTER_Y + TARGET_HALF_Y
 TARGET_MIN_Z = OBJ_BASE_Z - 0.05
 TARGET_MAX_Z = OBJ_BASE_Z + 0.05
+TARGET_YAW_DEG = 30.0
+TARGET_YAW_RAD = math.radians(TARGET_YAW_DEG)
+TARGET_YAW_COS = math.cos(0.5 * TARGET_YAW_RAD)
+TARGET_YAW_SIN = math.sin(0.5 * TARGET_YAW_RAD)
 TARGET_CENTER = (
-    0.5 * (TARGET_MIN_X + TARGET_MAX_X),
-    0.5 * (TARGET_MIN_Y + TARGET_MAX_Y),
+    TARGET_CENTER_X,
+    TARGET_CENTER_Y,
     0.5 * (TARGET_MIN_Z + TARGET_MAX_Z),
 )
 TARGET_SIZE = (
@@ -156,7 +166,7 @@ class ObjectTableSceneCfg(TableRedBlockSceneCfg):
             prim_path="/World/envs/env_.*/TargetArea",
             init_state=AssetBaseCfg.InitialStateCfg(
                 pos=list(TARGET_CENTER),
-                rot=[1.0, 0.0, 0.0, 0.0],
+                rot=[TARGET_YAW_COS, 0.0, 0.0, TARGET_YAW_SIN],
             ),
             spawn=sim_utils.CuboidCfg(
                 size=TARGET_SIZE,

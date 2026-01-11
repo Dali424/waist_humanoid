@@ -97,8 +97,8 @@ def compute_reward(
     reward[done_post] = 1.0  # In target post area
     reward[done & ~done_post] = 0.0  # In valid area but not target
 
-    env._reward_last = reward
     env._reward_counter = counter + 1
+    env._reward_last = reward
     rewards_dds = _get_rewards_dds_instance()
     if rewards_dds:
         rewards_dds.write_rewards_data(reward)

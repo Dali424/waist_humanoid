@@ -41,10 +41,6 @@ def reset_robot_to_initial_pose(init_arm_pose, robot_interface, reset_pose_publi
     Note: reset_category '2' mirrors the in-sim '0' key (full reset, including robot pose).
     """
     logger_mp.info("Initializing scene and robot to starting pose...")
-    publish_reset_category(2, reset_pose_publisher)  # match keyboard '0' reset robot pose in sim_main.py
-    time.sleep(1.0)
-    publish_reset_category(1, reset_pose_publisher)  # match keyboard '9' reset cube in sim_main.py
-    time.sleep(1.0)
     tau = robot_interface["arm_ik"].solve_tau(init_arm_pose)
     robot_interface["arm_ctrl"].ctrl_dual_arm(init_arm_pose, tau)
     time.sleep(1)
@@ -52,6 +48,10 @@ def reset_robot_to_initial_pose(init_arm_pose, robot_interface, reset_pose_publi
     if sim_reward_subscriber:
         sim_reward_subscriber.reset_data()
     time.sleep(1)
+    publish_reset_category(2, reset_pose_publisher)  # match keyboard '0' reset robot pose in sim_main.py
+    time.sleep(1.0)
+    publish_reset_category(1, reset_pose_publisher)  # match keyboard '9' reset cube in sim_main.py
+    time.sleep(1.0)
 
 
 def process_data_add(
@@ -186,7 +186,8 @@ def is_success(
                 reward_stats["reward_sum"] += 1
         sim_reward_subscriber.reset_data()
     # success
-    if reward_stats["reward_sum"] >= 10:
+    success_threshold = 25 if "PickPlace-BigBox" in cfg.repo_id else 10
+    if reward_stats["reward_sum"] >= success_threshold:
         process_data_save(episode_writer, "success")
         logger_mp.info(
             f"Episode {reward_stats['episode_num']} finished with reward {reward_stats['reward_sum']},save data..."

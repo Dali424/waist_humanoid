@@ -15,6 +15,7 @@ data/
 datasets/
 eval_data/
 unitree_lerobot/lerobot/outputs/
+unitree_lerobot/lerobot/train*.sh
 
 # Keep code datasets package tracked
 !unitree_lerobot/lerobot/src/lerobot/datasets/
