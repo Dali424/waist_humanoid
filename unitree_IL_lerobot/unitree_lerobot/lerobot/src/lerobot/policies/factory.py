@@ -42,6 +42,7 @@ from lerobot.policies.act_hier_dual_reverse_qrefine.configuration_act import (
 from lerobot.policies.act_hier_reverse.configuration_act import ACTHierReverseConfig
 from lerobot.policies.act_hier_reverse_adap.configuration_act import ACTHierReverseAdapConfig
 from lerobot.policies.act_hier3.configuration_act import ACTHier3Config
+from lerobot.policies.act_hier3_adap.configuration_act import ACTHier3AdapConfig
 from lerobot.policies.act_samdoo.configuration_act import ACTSamdooConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
@@ -108,6 +109,10 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.act_hier3.modeling_act import ACTHier3Policy
 
         return ACTHier3Policy
+    elif name == "act_hier3_adap":
+        from lerobot.policies.act_hier3_adap.modeling_act import ACTHier3AdapPolicy
+
+        return ACTHier3AdapPolicy
     elif name == "act_hier_dual_reverse":
         from lerobot.policies.act_hier_dual_reverse.modeling_act import ACTHierDualReversePolicy
 
@@ -193,6 +198,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return ACTHierDualReverseQRefineConfig(**kwargs)
     elif policy_type == "act_hier3":
         return ACTHier3Config(**kwargs)
+    elif policy_type == "act_hier3_adap":
+        return ACTHier3AdapConfig(**kwargs)
     elif policy_type == "vqbet":
         return VQBeTConfig(**kwargs)
     elif policy_type == "pi0":
