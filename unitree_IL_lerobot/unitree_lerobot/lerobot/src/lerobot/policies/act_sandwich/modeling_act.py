@@ -413,7 +413,11 @@ class ACT(nn.Module):
         # =================================================================
         waist_memory = torch.cat([encoder_out, arm_coarse_out], dim=0)
         waist_memory_pos = torch.cat(
-            [encoder_in_pos_embed, torch.zeros_like(arm_coarse_out)], dim=0
+            [
+                encoder_in_pos_embed.expand(-1, arm_coarse_out.shape[1], -1),
+                torch.zeros_like(arm_coarse_out),
+            ],
+            dim=0,
         )
 
         waist_dec_out = self.waist_decoder(
@@ -439,7 +443,11 @@ class ACT(nn.Module):
         # 3-2. Refinement
         arm_refine_memory = torch.cat([encoder_out, gated_waist_tokens], dim=0)
         arm_refine_memory_pos = torch.cat(
-            [encoder_in_pos_embed, torch.zeros_like(gated_waist_tokens)], dim=0
+            [
+                encoder_in_pos_embed.expand(-1, gated_waist_tokens.shape[1], -1),
+                torch.zeros_like(gated_waist_tokens),
+            ],
+            dim=0,
         )
 
         arm_refine_out = self.arm_decoder(
