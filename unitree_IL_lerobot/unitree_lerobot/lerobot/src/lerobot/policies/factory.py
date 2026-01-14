@@ -25,25 +25,15 @@ from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.envs.configs import EnvConfig
 from lerobot.envs.utils import env_to_policy_features
 from lerobot.policies.act.configuration_act import ACTConfig
+from lerobot.policies.act_bide_adap.configuration_act import ACTBideAdapConfig
 from lerobot.policies.act_hier.configuration_act import ACTHierConfig
 from lerobot.policies.act_hier_adap.configuration_act import ACTHierAdapConfig
-from lerobot.policies.act_hier_dual.configuration_act import ACTHierDualConfig
-from lerobot.policies.act_hier_dual_adap.configuration_act import ACTHierDualAdapConfig
-from lerobot.policies.act_hier_dual_qrefine.configuration_act import ACTHierDualQRefineConfig
-from lerobot.policies.act_hier_dual_qrefine_adap.configuration_act import ACTHierDualQRefineAdapConfig
-from lerobot.policies.act_hier_dual_reverse.configuration_act import ACTHierDualReverseConfig
-from lerobot.policies.act_hier_dual_reverse_adap.configuration_act import ACTHierDualReverseAdapConfig
-from lerobot.policies.act_hier_dual_reverse_adap_qrefine.configuration_act import (
-    ACTHierDualReverseAdapQRefineConfig,
-)
-from lerobot.policies.act_hier_dual_reverse_qrefine.configuration_act import (
-    ACTHierDualReverseQRefineConfig,
-)
 from lerobot.policies.act_hier_reverse.configuration_act import ACTHierReverseConfig
 from lerobot.policies.act_hier_reverse_adap.configuration_act import ACTHierReverseAdapConfig
 from lerobot.policies.act_hier3.configuration_act import ACTHier3Config
 from lerobot.policies.act_hier3_adap.configuration_act import ACTHier3AdapConfig
 from lerobot.policies.act_samdoo.configuration_act import ACTSamdooConfig
+from lerobot.policies.act_sandwich.configuration_act import ACTSandwichConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
 from lerobot.policies.pi0fast.configuration_pi0fast import PI0FASTConfig
@@ -69,10 +59,18 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.act.modeling_act import ACTPolicy
 
         return ACTPolicy
+    elif name == "act_bide_adap":
+        from lerobot.policies.act_bide_adap.modeling_act import ACTBideAdapPolicy
+
+        return ACTBideAdapPolicy
     elif name == "ACT_samdoo":
         from lerobot.policies.act_samdoo.modeling_act import ACTSamdooPolicy
 
         return ACTSamdooPolicy
+    elif name == "act_sandwich":
+        from lerobot.policies.act_sandwich.modeling_act import ACTSandwichPolicy
+
+        return ACTSandwichPolicy
     elif name == "act_hier":
         from lerobot.policies.act_hier.modeling_act import ACTHierPolicy
 
@@ -89,22 +87,6 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.act_hier_reverse_adap.modeling_act import ACTHierReverseAdapPolicy
 
         return ACTHierReverseAdapPolicy
-    elif name == "act_hier_dual":
-        from lerobot.policies.act_hier_dual.modeling_act import ACTHierDualPolicy
-
-        return ACTHierDualPolicy
-    elif name == "act_hier_dual_adap":
-        from lerobot.policies.act_hier_dual_adap.modeling_act import ACTHierDualAdapPolicy
-
-        return ACTHierDualAdapPolicy
-    elif name == "act_hier_dual_qrefine":
-        from lerobot.policies.act_hier_dual_qrefine.modeling_act import ACTHierDualQRefinePolicy
-
-        return ACTHierDualQRefinePolicy
-    elif name == "act_hier_dual_qrefine_adap":
-        from lerobot.policies.act_hier_dual_qrefine_adap.modeling_act import ACTHierDualQRefineAdapPolicy
-
-        return ACTHierDualQRefineAdapPolicy
     elif name == "act_hier3":
         from lerobot.policies.act_hier3.modeling_act import ACTHier3Policy
 
@@ -113,28 +95,6 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.act_hier3_adap.modeling_act import ACTHier3AdapPolicy
 
         return ACTHier3AdapPolicy
-    elif name == "act_hier_dual_reverse":
-        from lerobot.policies.act_hier_dual_reverse.modeling_act import ACTHierDualReversePolicy
-
-        return ACTHierDualReversePolicy
-    elif name == "act_hier_dual_reverse_adap":
-        from lerobot.policies.act_hier_dual_reverse_adap.modeling_act import (
-            ACTHierDualReverseAdapPolicy,
-        )
-
-        return ACTHierDualReverseAdapPolicy
-    elif name == "act_hier_dual_reverse_adap_qrefine":
-        from lerobot.policies.act_hier_dual_reverse_adap_qrefine.modeling_act import (
-            ACTHierDualReverseAdapQRefinePolicy,
-        )
-
-        return ACTHierDualReverseAdapQRefinePolicy
-    elif name == "act_hier_dual_reverse_qrefine":
-        from lerobot.policies.act_hier_dual_reverse_qrefine.modeling_act import (
-            ACTHierDualReverseQRefinePolicy,
-        )
-
-        return ACTHierDualReverseQRefinePolicy
     elif name == "vqbet":
         from lerobot.policies.vqbet.modeling_vqbet import VQBeTPolicy
 
@@ -170,8 +130,12 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return DiffusionConfig(**kwargs)
     elif policy_type == "act":
         return ACTConfig(**kwargs)
+    elif policy_type == "act_bide_adap":
+        return ACTBideAdapConfig(**kwargs)
     elif policy_type == "ACT_samdoo":
         return ACTSamdooConfig(**kwargs)
+    elif policy_type == "act_sandwich":
+        return ACTSandwichConfig(**kwargs)
     elif policy_type == "act_hier":
         return ACTHierConfig(**kwargs)
     elif policy_type == "act_hier_adap":
@@ -180,22 +144,6 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return ACTHierReverseConfig(**kwargs)
     elif policy_type == "act_hier_reverse_adap":
         return ACTHierReverseAdapConfig(**kwargs)
-    elif policy_type == "act_hier_dual":
-        return ACTHierDualConfig(**kwargs)
-    elif policy_type == "act_hier_dual_adap":
-        return ACTHierDualAdapConfig(**kwargs)
-    elif policy_type == "act_hier_dual_qrefine":
-        return ACTHierDualQRefineConfig(**kwargs)
-    elif policy_type == "act_hier_dual_qrefine_adap":
-        return ACTHierDualQRefineAdapConfig(**kwargs)
-    elif policy_type == "act_hier_dual_reverse":
-        return ACTHierDualReverseConfig(**kwargs)
-    elif policy_type == "act_hier_dual_reverse_adap":
-        return ACTHierDualReverseAdapConfig(**kwargs)
-    elif policy_type == "act_hier_dual_reverse_adap_qrefine":
-        return ACTHierDualReverseAdapQRefineConfig(**kwargs)
-    elif policy_type == "act_hier_dual_reverse_qrefine":
-        return ACTHierDualReverseQRefineConfig(**kwargs)
     elif policy_type == "act_hier3":
         return ACTHier3Config(**kwargs)
     elif policy_type == "act_hier3_adap":

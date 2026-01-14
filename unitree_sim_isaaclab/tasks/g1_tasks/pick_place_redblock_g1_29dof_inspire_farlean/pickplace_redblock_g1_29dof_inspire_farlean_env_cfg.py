@@ -45,6 +45,22 @@ SPAWN_SIZE_Z = 0.00201
 # Toggle for visualizing the spawn range on the table.
 SHOW_SPAWN_AREA = False
 
+# Target (success) area visualization (matches side spawn target box)
+TARGET_MIN_X, TARGET_MAX_X = -4.2865, -4.1015
+TARGET_MIN_Y, TARGET_MAX_Y = -4.0576, -3.8151
+TARGET_MIN_Z, TARGET_MAX_Z = 0.815, 0.83
+TARGET_CENTER = (
+    0.5 * (TARGET_MIN_X + TARGET_MAX_X),
+    0.5 * (TARGET_MIN_Y + TARGET_MAX_Y),
+    0.5 * (TARGET_MIN_Z + TARGET_MAX_Z),
+)
+TARGET_SIZE = (
+    max(1e-3, TARGET_MAX_X - TARGET_MIN_X),
+    max(1e-3, TARGET_MAX_Y - TARGET_MIN_Y),
+    max(1e-3, TARGET_MAX_Z - TARGET_MIN_Z),
+)
+SHOW_TARGET_AREA = False
+
 
 @configclass
 class ObjectTableSceneCfg(TableRedBlockSceneCfg):
@@ -72,6 +88,21 @@ class ObjectTableSceneCfg(TableRedBlockSceneCfg):
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
                 collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
                 visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 0.0), opacity=1.0),
+            ),
+        )
+    # Optional target-area visualization (helps to see success zone)
+    if SHOW_TARGET_AREA:
+        target_area: AssetBaseCfg = AssetBaseCfg(
+            prim_path="/World/envs/env_.*/TargetArea",
+            init_state=AssetBaseCfg.InitialStateCfg(
+                pos=list(TARGET_CENTER),
+                rot=[1.0, 0.0, 0.0, 0.0],
+            ),
+            spawn=sim_utils.CuboidCfg(
+                size=TARGET_SIZE,
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+                collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.6, 1.0), opacity=0.4),
             ),
         )
 
@@ -103,7 +134,18 @@ class TerminationsCfg:
 
 @configclass
 class RewardsCfg:
-    reward = RewTerm(func=mdp.compute_reward, weight=1.0)
+    reward = RewTerm(
+        func=mdp.compute_reward,
+        weight=1.0,
+        params={
+            "post_min_x": TARGET_MIN_X,
+            "post_max_x": TARGET_MAX_X,
+            "post_min_y": TARGET_MIN_Y,
+            "post_max_y": TARGET_MAX_Y,
+            "post_min_height": TARGET_MIN_Z,
+            "post_max_height": TARGET_MAX_Z,
+        },
+    )
 
 
 @configclass

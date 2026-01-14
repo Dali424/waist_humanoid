@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# act_hier_dual_gated.py
+# act_hier_gated.py
 
 import math
 from collections import deque
@@ -16,15 +16,15 @@ from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.ops.misc import FrozenBatchNorm2d
 
 from lerobot.constants import ACTION, OBS_IMAGES
-from lerobot.policies.act_hier_dual_adap.configuration_act import ACTHierDualAdapConfig
+from lerobot.policies.act_hier_adap.configuration_act import ACTHierAdapConfig
 from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.pretrained import PreTrainedPolicy
 
-class ACTHierDualAdapPolicy(PreTrainedPolicy):
-    config_class = ACTHierDualAdapConfig
-    name = "act_hier_dual_adap"
+class ACTHierAdapPolicy(PreTrainedPolicy):
+    config_class = ACTHierAdapConfig
+    name = "act_hier_adap"
 
-    def __init__(self, config: ACTHierDualAdapConfig, dataset_stats: dict[str, dict[str, Tensor]] | None = None):
+    def __init__(self, config: ACTHierAdapConfig, dataset_stats: dict[str, dict[str, Tensor]] | None = None):
         super().__init__(config)
         config.validate_features()
         self.config = config
@@ -113,22 +113,25 @@ class ACTTemporalEnsembler:
         action, self.ensembled_actions, self.ensembled_actions_count = (self.ensembled_actions[:, 0], self.ensembled_actions[:, 1:], self.ensembled_actions_count[1:])
         return action
 
-# [NOVELTY] Idea 3: Adaptive Gating
-class AdaptiveGate(nn.Module):
+# [NOVELTY] Idea 3: Adaptive Gating Module
+class ContextGating(nn.Module):
     def __init__(self, dim_model):
         super().__init__()
         self.gate_net = nn.Sequential(
-            nn.Linear(dim_model, dim_model // 2),
+            nn.Linear(dim_model * 2, dim_model),
             nn.ReLU(),
-            nn.Linear(dim_model // 2, 1),
+            nn.Linear(dim_model, dim_model),
             nn.Sigmoid()
         )
-    def forward(self, x, context_out):
-        alpha = self.gate_net(x)
-        return alpha * context_out
+    def forward(self, queries, context):
+        # queries: Arm queries (B, S, D)
+        # context: Waist output (B, S, D)
+        combined = torch.cat([queries, context], dim=-1)
+        alpha = self.gate_net(combined)
+        return alpha * context
 
 class ACT(nn.Module):
-    def __init__(self, config: ACTHierDualAdapConfig):
+    def __init__(self, config: ACTHierAdapConfig):
         super().__init__()
         self.config = config
         if self.config.use_vae:
@@ -148,7 +151,7 @@ class ACT(nn.Module):
 
         self.encoder = ACTEncoder(config)
         self.waist_decoder = ACTDecoder(config)
-        self.arm_decoder = ACTArmDualDecoder(config)
+        self.arm_decoder = ACTDecoder(config)
 
         if self.config.robot_state_feature:
             self.encoder_robot_state_input_proj = nn.Linear(self.config.robot_state_feature.shape[0], config.dim_model)
@@ -168,6 +171,9 @@ class ACT(nn.Module):
         self.decoder_pos_embed = nn.Embedding(config.chunk_size, config.dim_model)
         self.register_buffer("decoder_in_template", torch.zeros(config.chunk_size, 1, config.dim_model), persistent=False)
 
+        # [NOVELTY] Gating Module
+        self.waist_gating = ContextGating(config.dim_model)
+
         self.waist_head = nn.Linear(config.dim_model, self.config.waist_dim)
         self.arm_head = nn.Linear(config.dim_model, self.config.arm_dim)
         self.hand_head = nn.Linear(config.dim_model, self.config.hand_dim)
@@ -176,9 +182,9 @@ class ACT(nn.Module):
     def _reset_parameters(self):
         for p in chain(self.encoder.parameters(), self.waist_decoder.parameters(), self.arm_decoder.parameters()):
             if p.dim() > 1: nn.init.xavier_uniform_(p)
-        for head in (self.waist_head, self.arm_head, self.hand_head):
-            nn.init.xavier_uniform_(head.weight)
-            nn.init.zeros_(head.bias)
+        for head in (self.waist_head, self.arm_head, self.hand_head, self.waist_gating.gate_net):
+            if hasattr(head, "weight"): nn.init.xavier_uniform_(head.weight)
+            if hasattr(head, "bias"): nn.init.zeros_(head.bias)
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, tuple[Tensor, Tensor] | tuple[None, None]]:
         if self.config.use_vae and self.training: assert "action" in batch
@@ -222,15 +228,29 @@ class ACT(nn.Module):
         decoder_queries = self.decoder_in_template.expand(-1, batch_size, -1).type_as(encoder_pos)
         decoder_pos = self.decoder_pos_embed.weight.unsqueeze(1)
 
-        waist_latent = self.waist_decoder(decoder_queries, encoder_out, encoder_pos_embed=encoder_pos, decoder_pos_embed=decoder_pos)
+        # Waist Decoder
+        waist_dec_out = self.waist_decoder(decoder_queries, encoder_out, encoder_pos_embed=encoder_pos, decoder_pos_embed=decoder_pos)
+        waist_tokens = waist_dec_out # (S, B, D)
+
+        # [NOVELTY] Apply Adaptive Gating
+        # 1. Prepare inputs (B, S, D)
+        waist_tokens_b = waist_tokens.transpose(0, 1)
+        queries_b = decoder_queries.transpose(0, 1)
+        # 2. Gate waist tokens based on query relevance
+        gated_waist = self.waist_gating(queries_b, waist_tokens_b) # (B, S, D)
+        # 3. Transpose back for decoder (S, B, D)
+        gated_waist_tokens = gated_waist.transpose(0, 1)
+
+        # Arm Decoder: Concat memory (Standard act_hier structure but with gated waist)
+        arm_memory = torch.cat([encoder_out, gated_waist_tokens], dim=0)
+        arm_memory_pos = torch.cat([encoder_pos.expand(-1, waist_tokens.shape[1], -1), torch.zeros_like(waist_tokens)], dim=0)
         
-        # Arm decoder with dual cross attention layers
-        waist_pos = decoder_pos.expand(-1, waist_latent.shape[1], -1)
-        arm_latent = self.arm_decoder(decoder_queries, encoder_out, waist_latent, encoder_pos_embed=encoder_pos, waist_pos_embed=waist_pos, decoder_pos_embed=decoder_pos)
+        arm_dec_out = self.arm_decoder(decoder_queries, arm_memory, encoder_pos_embed=arm_memory_pos, decoder_pos_embed=decoder_pos)
         
-        waist = self.waist_head(waist_latent.transpose(0, 1))
-        arm = self.arm_head(arm_latent.transpose(0, 1))
-        hand = self.hand_head(arm_latent.transpose(0, 1))
+        waist = self.waist_head(waist_dec_out.transpose(0, 1))
+        arm_dec_out = arm_dec_out.transpose(0, 1)
+        arm = self.arm_head(arm_dec_out)
+        hand = self.hand_head(arm_dec_out)
 
         actions = torch.zeros(batch_size, self.config.chunk_size, self.config.action_feature.shape[0], device=arm.device, dtype=arm.dtype)
         actions[:, :, self.config.waist_indices] = waist
@@ -239,7 +259,7 @@ class ACT(nn.Module):
         return actions, (mu, log_sigma_x2)
 
 class ACTEncoder(nn.Module):
-    def __init__(self, config: ACTHierDualAdapConfig, is_vae_encoder: bool = False):
+    def __init__(self, config: ACTHierAdapConfig, is_vae_encoder: bool = False):
         super().__init__()
         self.is_vae_encoder = is_vae_encoder
         num_layers = config.n_vae_encoder_layers if self.is_vae_encoder else config.n_encoder_layers
@@ -250,7 +270,7 @@ class ACTEncoder(nn.Module):
         return self.norm(x)
 
 class ACTEncoderLayer(nn.Module):
-    def __init__(self, config: ACTHierDualAdapConfig):
+    def __init__(self, config: ACTHierAdapConfig):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
         self.linear1 = nn.Linear(config.dim_model, config.dim_feedforward)
@@ -276,7 +296,7 @@ class ACTEncoderLayer(nn.Module):
         return x
 
 class ACTDecoder(nn.Module):
-    def __init__(self, config: ACTHierDualAdapConfig):
+    def __init__(self, config: ACTHierAdapConfig):
         super().__init__()
         self.layers = nn.ModuleList([ACTDecoderLayer(config) for _ in range(config.n_decoder_layers)])
         self.norm = nn.LayerNorm(config.dim_model)
@@ -286,7 +306,7 @@ class ACTDecoder(nn.Module):
         return x
 
 class ACTDecoderLayer(nn.Module):
-    def __init__(self, config: ACTHierDualAdapConfig):
+    def __init__(self, config: ACTHierAdapConfig):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
         self.multihead_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
@@ -317,74 +337,6 @@ class ACTDecoderLayer(nn.Module):
         x = self.linear2(self.dropout(self.activation(self.linear1(x))))
         x = skip + self.dropout3(x)
         if not self.pre_norm: x = self.norm3(x)
-        return x
-
-class ACTArmDualDecoder(nn.Module):
-    def __init__(self, config: ACTHierDualAdapConfig):
-        super().__init__()
-        self.layers = nn.ModuleList([ACTArmDualDecoderLayer(config) for _ in range(config.n_decoder_layers)])
-        self.norm = nn.LayerNorm(config.dim_model)
-    def forward(self, x, encoder_out, waist_out, decoder_pos_embed=None, encoder_pos_embed=None, waist_pos_embed=None):
-        for layer in self.layers: x = layer(x, encoder_out, waist_out, decoder_pos_embed, encoder_pos_embed, waist_pos_embed)
-        if self.norm: x = self.norm(x)
-        return x
-
-class ACTArmDualDecoderLayer(nn.Module):
-    def __init__(self, config: ACTHierDualAdapConfig):
-        super().__init__()
-        self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
-        self.cross_attn_encoder = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
-        self.cross_attn_waist = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
-        self.linear_mid1 = nn.Linear(config.dim_model, config.dim_feedforward)
-        self.linear_mid2 = nn.Linear(config.dim_feedforward, config.dim_model)
-        self.linear_final1 = nn.Linear(config.dim_model, config.dim_feedforward)
-        self.linear_final2 = nn.Linear(config.dim_feedforward, config.dim_model)
-        self.dropout_self = nn.Dropout(config.dropout)
-        self.dropout_cross1 = nn.Dropout(config.dropout)
-        self.dropout_mid = nn.Dropout(config.dropout)
-        self.dropout_cross2 = nn.Dropout(config.dropout)
-        self.dropout_final = nn.Dropout(config.dropout)
-        self.norm1 = nn.LayerNorm(config.dim_model)
-        self.norm2 = nn.LayerNorm(config.dim_model)
-        self.norm_mid = nn.LayerNorm(config.dim_model)
-        self.norm3 = nn.LayerNorm(config.dim_model)
-        self.norm4 = nn.LayerNorm(config.dim_model)
-        self.activation = get_activation_fn(config.feedforward_activation)
-        self.pre_norm = config.pre_norm
-        # [NOVELTY] Adaptive Gating
-        self.waist_gate = AdaptiveGate(config.dim_model)
-
-    def maybe_add_pos_embed(self, tensor, pos_embed): return tensor if pos_embed is None else tensor + pos_embed
-    def forward(self, x, encoder_out, waist_out, decoder_pos_embed=None, encoder_pos_embed=None, waist_pos_embed=None):
-        skip = x
-        if self.pre_norm: x = self.norm1(x)
-        q = k = self.maybe_add_pos_embed(x, decoder_pos_embed)
-        x = self.self_attn(q, k, value=x)[0]
-        x = skip + self.dropout_self(x)
-
-        if self.pre_norm: skip = x; x = self.norm2(x)
-        else: x = self.norm1(x); skip = x
-        x = self.cross_attn_encoder(query=self.maybe_add_pos_embed(x, decoder_pos_embed), key=self.maybe_add_pos_embed(encoder_out, encoder_pos_embed), value=encoder_out)[0]
-        x = skip + self.dropout_cross1(x)
-
-        if self.pre_norm: skip = x; x = self.norm_mid(x)
-        else: x = self.norm2(x); skip = x
-        x = self.linear_mid2(self.dropout_mid(self.activation(self.linear_mid1(x))))
-        x = skip + self.dropout_mid(x)
-
-        if self.pre_norm: skip = x; x = self.norm3(x)
-        else: x = self.norm_mid(x); skip = x
-        # Waist Context
-        waist_context = self.cross_attn_waist(query=self.maybe_add_pos_embed(x, decoder_pos_embed), key=self.maybe_add_pos_embed(waist_out, waist_pos_embed), value=waist_out)[0]
-        # [NOVELTY] Apply Gate
-        gated_waist_context = self.waist_gate(x, waist_context)
-        x = skip + self.dropout_cross2(gated_waist_context)
-
-        if self.pre_norm: skip = x; x = self.norm4(x)
-        else: x = self.norm3(x); skip = x
-        x = self.linear_final2(self.dropout_final(self.activation(self.linear_final1(x))))
-        x = skip + self.dropout_final(x)
-        if not self.pre_norm: x = self.norm4(x)
         return x
 
 def create_sinusoidal_pos_embedding(num_positions: int, dimension: int) -> Tensor:

@@ -260,6 +260,8 @@ def eval_policy(
         reward_stats = {
             "reward_sum": 0.0,
             "episode_num": 0.0,
+            "saved_episodes": 0,
+            "stop_eval": False,
         }
 
         if user_input.lower() == "s":
@@ -411,6 +413,11 @@ def eval_policy(
                         init_arm_pose,
                         robot_interface,
                     )
+                    if reward_stats.get("stop_eval"):
+                        logger_mp.info(
+                            f"Reached target saved episodes ({reward_stats.get('saved_episodes', 0)}/{cfg.episodes}). Stopping."
+                        )
+                        break
 
                 if cfg.visualization:
                     visualization_data(idx, observation, state_tensor.numpy(), action_np, rerun_logger)

@@ -192,6 +192,7 @@ def is_success(
         logger_mp.info(
             f"Episode {reward_stats['episode_num']} finished with reward {reward_stats['reward_sum']},save data..."
         )
+        reward_stats["saved_episodes"] = reward_stats.get("saved_episodes", 0) + 1
         reward_stats["episode_num"] = -1
         reward_stats["reward_sum"] = 0
         reset_robot_to_initial_pose(init_arm_pose, robot_interface, reset_pose_publisher, policy, sim_reward_subscriber)
@@ -199,9 +200,13 @@ def is_success(
     elif reward_stats["episode_num"] > cfg.max_episodes:
         process_data_save(episode_writer, "fail")
         logger_mp.info(f"Episode {reward_stats['episode_num']} finished with reward {reward_stats['reward_sum']}")
+        reward_stats["saved_episodes"] = reward_stats.get("saved_episodes", 0) + 1
         reward_stats["episode_num"] = -1
         reward_stats["reward_sum"] = 0
         reset_robot_to_initial_pose(init_arm_pose, robot_interface, reset_pose_publisher, policy, sim_reward_subscriber)
+
+    if cfg.episodes > 0 and reward_stats.get("saved_episodes", 0) >= cfg.episodes:
+        reward_stats["stop_eval"] = True
 
 
 @dataclass

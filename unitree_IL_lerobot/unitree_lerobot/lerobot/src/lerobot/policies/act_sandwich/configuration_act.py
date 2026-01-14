@@ -16,10 +16,10 @@
 from dataclasses import dataclass
 
 from lerobot.configs.policies import PreTrainedConfig
-from lerobot.policies.act_hier_dual.configuration_act import ACTHierDualConfig
+from lerobot.policies.act_hier_adap.configuration_act import ACTHierAdapConfig
 
 
-@PreTrainedConfig.register_subclass("act_hier_dual_qrefine")
+@PreTrainedConfig.register_subclass("act_sandwich")
 @dataclass
-class ACTHierDualQRefineConfig(ACTHierDualConfig):
-    """Q-refine ACT hier dual policy."""
+class ACTSandwichConfig(ACTHierAdapConfig):
+    """Sandwich ACT policy (arm -> waist -> arm refine)."""

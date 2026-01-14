@@ -5,15 +5,13 @@
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-#
 #     http://www.apache.org/licenses/LICENSE-2.0
-#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Action Chunking Transformer Policy (dual cross-attn, arm/hand -> waist)."""
+"""Action Chunking Transformer Policy (arm/hand -> waist)."""
 
 import math
 from collections import deque
@@ -30,20 +28,20 @@ from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.ops.misc import FrozenBatchNorm2d
 
 from lerobot.constants import ACTION, OBS_IMAGES
-from lerobot.policies.act_hier_dual_reverse_adap.configuration_act import ACTHierDualReverseAdapConfig
+from lerobot.policies.act_hier_reverse.configuration_act import ACTHierReverseConfig
 from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.pretrained import PreTrainedPolicy
 
 
-class ACTHierDualReverseAdapPolicy(PreTrainedPolicy):
-    """Dual cross-attn ACT variant decoding arm/hand first, then waist."""
+class ACTHierReversePolicy(PreTrainedPolicy):
+    """Hierarchical ACT variant decoding arm/hand first, then waist."""
 
-    config_class = ACTHierDualReverseAdapConfig
-    name = "act_hier_dual_reverse_adap"
+    config_class = ACTHierReverseConfig
+    name = "act_hier_reverse"
 
     def __init__(
         self,
-        config: ACTHierDualReverseAdapConfig,
+        config: ACTHierReverseConfig,
         dataset_stats: dict[str, dict[str, Tensor]] | None = None,
     ):
         super().__init__(config)
@@ -107,10 +105,12 @@ class ACTHierDualReverseAdapPolicy(PreTrainedPolicy):
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
         self.eval()
+
         batch = self.normalize_inputs(batch)
         if self.config.image_features:
             batch = dict(batch)
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
+
         actions = self.model(batch)[0]
         actions = self.unnormalize_outputs({ACTION: actions})[ACTION]
         return actions
@@ -120,6 +120,7 @@ class ACTHierDualReverseAdapPolicy(PreTrainedPolicy):
         if self.config.image_features:
             batch = dict(batch)
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
+
         batch = self.normalize_targets(batch)
         actions_hat, (mu_hat, log_sigma_x2_hat) = self.model(batch)
 
@@ -136,11 +137,13 @@ class ACTHierDualReverseAdapPolicy(PreTrainedPolicy):
             loss = l1_loss + mean_kld * self.config.kl_weight
         else:
             loss = l1_loss
+
         return loss, loss_dict
 
 
 class ACTTemporalEnsembler:
     def __init__(self, temporal_ensemble_coeff: float, chunk_size: int) -> None:
+        """Temporal ensembling as described in Algorithm 2 of https://huggingface.co/papers/2304.13705."""
         self.chunk_size = chunk_size
         self.ensemble_weights = torch.exp(-temporal_ensemble_coeff * torch.arange(chunk_size))
         self.ensemble_weights_cumsum = torch.cumsum(self.ensemble_weights, dim=0)
@@ -154,49 +157,31 @@ class ACTTemporalEnsembler:
         self.ensemble_weights = self.ensemble_weights.to(device=actions.device)
         self.ensemble_weights_cumsum = self.ensemble_weights_cumsum.to(device=actions.device)
         if self.ensembled_actions is None:
-            self.ensembled_actions = actions * self.ensemble_weights[None, :, None]
-            self.ensembled_actions_count = self.ensemble_weights_cumsum.clone()
+            self.ensembled_actions = actions.clone()
+            self.ensembled_actions_count = torch.ones(
+                (self.chunk_size, 1), dtype=torch.long, device=self.ensembled_actions.device
+            )
         else:
-            if self.ensembled_actions.shape[0] != actions.shape[0]:
-                raise ValueError(
-                    f"New actions must have same batch size ({actions.shape[0]}) as ensembled actions "
-                    f"({self.ensembled_actions.shape[0]})."
-                )
-            self.ensembled_actions = torch.cat(
-                [self.ensembled_actions, actions * self.ensemble_weights[None, :, None]], dim=1
-            )
+            self.ensembled_actions *= self.ensemble_weights_cumsum[self.ensembled_actions_count - 1]
+            self.ensembled_actions += actions[:, :-1] * self.ensemble_weights[self.ensembled_actions_count]
+            self.ensembled_actions /= self.ensemble_weights_cumsum[self.ensembled_actions_count]
+            self.ensembled_actions_count = torch.clamp(self.ensembled_actions_count + 1, max=self.chunk_size)
+            self.ensembled_actions = torch.cat([self.ensembled_actions, actions[:, -1:]], dim=1)
             self.ensembled_actions_count = torch.cat(
-                [self.ensembled_actions_count, self.ensemble_weights_cumsum], dim=0
+                [self.ensembled_actions_count, torch.ones_like(self.ensembled_actions_count[-1:])]
             )
-        ensembled_actions = self.ensembled_actions / self.ensembled_actions_count[:, None]
         action, self.ensembled_actions, self.ensembled_actions_count = (
-            ensembled_actions[:, 0],
+            self.ensembled_actions[:, 0],
             self.ensembled_actions[:, 1:],
             self.ensembled_actions_count[1:],
         )
         return action
 
 
-class ContextGating(nn.Module):
-    def __init__(self, dim_model: int) -> None:
-        super().__init__()
-        self.gate_net = nn.Sequential(
-            nn.Linear(dim_model * 2, dim_model),
-            nn.ReLU(),
-            nn.Linear(dim_model, dim_model),
-            nn.Sigmoid(),
-        )
-
-    def forward(self, queries: Tensor, context: Tensor) -> Tensor:
-        combined = torch.cat([queries, context], dim=-1)
-        alpha = self.gate_net(combined)
-        return alpha * context
-
-
 class ACT(nn.Module):
-    """Dual cross-attention ACT with reversed decoding (arm/hand -> waist)."""
+    """Action Chunking Transformer with reversed decoding order (arm/hand -> waist)."""
 
-    def __init__(self, config: ACTHierDualReverseAdapConfig):
+    def __init__(self, config: ACTHierReverseConfig):
         super().__init__()
         self.config = config
 
@@ -229,8 +214,8 @@ class ACT(nn.Module):
             self.backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
 
         self.encoder = ACTEncoder(config)
-        self.arm_decoder = ACTDualDecoder(config)
-        self.waist_decoder = ACTDualDecoder(config)
+        self.arm_decoder = ACTDecoder(config)
+        self.waist_decoder = ACTDecoder(config)
 
         if self.config.robot_state_feature:
             self.encoder_robot_state_input_proj = nn.Linear(
@@ -263,8 +248,6 @@ class ACT(nn.Module):
             "decoder_in_template", torch.zeros(config.chunk_size, 1, config.dim_model), persistent=False
         )
 
-        self.arm_gating = ContextGating(config.dim_model)
-
         self.waist_head = nn.Linear(config.dim_model, self.config.waist_dim)
         self.arm_head = nn.Linear(config.dim_model, self.config.arm_dim)
         self.hand_head = nn.Linear(config.dim_model, self.config.hand_dim)
@@ -272,20 +255,12 @@ class ACT(nn.Module):
         self._reset_parameters()
 
     def _reset_parameters(self):
-        for p in chain(
-            self.encoder.parameters(),
-            self.arm_decoder.parameters(),
-            self.waist_decoder.parameters(),
-        ):
+        for p in chain(self.encoder.parameters(), self.arm_decoder.parameters(), self.waist_decoder.parameters()):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
         for head in (self.waist_head, self.arm_head, self.hand_head):
             nn.init.xavier_uniform_(head.weight)
             nn.init.zeros_(head.bias)
-        for module in self.arm_gating.gate_net:
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-                nn.init.zeros_(module.bias)
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, tuple[Tensor, Tensor] | tuple[None, None]]:
         if self.config.use_vae and self.training:
@@ -293,18 +268,18 @@ class ACT(nn.Module):
                 "actions must be provided when using the variational objective in training mode."
             )
 
-        batch_size = (
-            batch["observation.images"][0].shape[0]
-            if "observation.images" in batch
-            else batch["observation.environment_state"].shape[0]
-        )
+        if "observation.images" in batch:
+            batch_size = batch["observation.images"][0].shape[0]
+        else:
+            batch_size = batch["observation.environment_state"].shape[0]
 
         if self.config.use_vae and "action" in batch and self.training:
             cls_embed = einops.repeat(
                 self.vae_encoder_cls_embed.weight, "1 d -> b 1 d", b=batch_size
             )
             if self.config.robot_state_feature:
-                robot_state_embed = self.vae_encoder_robot_state_input_proj(batch["observation.state"]).unsqueeze(1)
+                robot_state_embed = self.vae_encoder_robot_state_input_proj(batch["observation.state"])
+                robot_state_embed = robot_state_embed.unsqueeze(1)
             action_embed = self.vae_encoder_action_input_proj(batch["action"])
             vae_encoder_input = [cls_embed, action_embed] if not self.config.robot_state_feature else [
                 cls_embed,
@@ -362,32 +337,28 @@ class ACT(nn.Module):
         decoder_queries = self.decoder_in_template.expand(-1, batch_size, -1).type_as(encoder_in_pos_embed)
         decoder_pos = self.decoder_pos_embed.weight.unsqueeze(1)
 
-        # Stage 1: arm decoder (encoder-only).
+        # Stage 1: decode arm/hand directly from encoder context.
         arm_dec_out = self.arm_decoder(
             decoder_queries,
             encoder_out,
-            prev_out=None,
             encoder_pos_embed=encoder_in_pos_embed,
             decoder_pos_embed=decoder_pos,
-            prev_pos_embed=None,
         )
         arm_tokens = arm_dec_out  # (S,B,D)
         arm_dec_out = arm_dec_out.transpose(0, 1)  # (B,S,D)
         arm = self.arm_head(arm_dec_out)
         hand = self.hand_head(arm_dec_out)
 
-        # Stage 2: waist decoder conditioned on arm/hand tokens.
-        arm_tokens_b = arm_tokens.transpose(0, 1)
-        queries_b = decoder_queries.transpose(0, 1)
-        gated_arm_tokens = self.arm_gating(queries_b, arm_tokens_b).transpose(0, 1)
-        arm_pos = decoder_pos.expand(-1, gated_arm_tokens.shape[1], -1)
+        # Stage 2: decode waist conditioned on arm/hand latents.
+        waist_memory = torch.cat([encoder_out, arm_tokens], dim=0)
+        waist_memory_pos = torch.cat(
+            [encoder_in_pos_embed.expand(-1, arm_tokens.shape[1], -1), torch.zeros_like(arm_tokens)], dim=0
+        )
         waist_dec_out = self.waist_decoder(
             decoder_queries,
-            encoder_out,
-            prev_out=gated_arm_tokens,
-            encoder_pos_embed=encoder_in_pos_embed,
+            waist_memory,
+            encoder_pos_embed=waist_memory_pos,
             decoder_pos_embed=decoder_pos,
-            prev_pos_embed=arm_pos,
         )
         waist_dec_out = waist_dec_out.transpose(0, 1)  # (B,S,D)
         waist = self.waist_head(waist_dec_out)
@@ -404,7 +375,7 @@ class ACT(nn.Module):
 
 
 class ACTEncoder(nn.Module):
-    def __init__(self, config: ACTHierDualReverseAdapConfig, is_vae_encoder: bool = False):
+    def __init__(self, config: ACTHierReverseConfig, is_vae_encoder: bool = False):
         super().__init__()
         self.is_vae_encoder = is_vae_encoder
         num_layers = config.n_vae_encoder_layers if self.is_vae_encoder else config.n_encoder_layers
@@ -421,16 +392,18 @@ class ACTEncoder(nn.Module):
 
 
 class ACTEncoderLayer(nn.Module):
-    def __init__(self, config: ACTHierDualReverseAdapConfig):
+    def __init__(self, config: ACTHierReverseConfig):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
         self.linear1 = nn.Linear(config.dim_model, config.dim_feedforward)
         self.dropout = nn.Dropout(config.dropout)
         self.linear2 = nn.Linear(config.dim_feedforward, config.dim_model)
+
         self.norm1 = nn.LayerNorm(config.dim_model)
         self.norm2 = nn.LayerNorm(config.dim_model)
         self.dropout1 = nn.Dropout(config.dropout)
         self.dropout2 = nn.Dropout(config.dropout)
+
         self.activation = get_activation_fn(config.feedforward_activation)
         self.pre_norm = config.pre_norm
 
@@ -454,60 +427,44 @@ class ACTEncoderLayer(nn.Module):
         return x
 
 
-class ACTDualDecoder(nn.Module):
-    """Decoder with dual cross-attention: encoder features then previous decoder outputs (optional)."""
-
-    def __init__(self, config: ACTHierDualReverseAdapConfig):
+class ACTDecoder(nn.Module):
+    def __init__(self, config: ACTHierReverseConfig):
         super().__init__()
-        self.layers = nn.ModuleList([ACTDualDecoderLayer(config) for _ in range(config.n_decoder_layers)])
+        self.layers = nn.ModuleList([ACTDecoderLayer(config) for _ in range(config.n_decoder_layers)])
         self.norm = nn.LayerNorm(config.dim_model)
 
     def forward(
         self,
         x: Tensor,
         encoder_out: Tensor,
-        prev_out: Tensor | None = None,
         decoder_pos_embed: Tensor | None = None,
         encoder_pos_embed: Tensor | None = None,
-        prev_pos_embed: Tensor | None = None,
     ) -> Tensor:
         for layer in self.layers:
             x = layer(
-                x,
-                encoder_out=encoder_out,
-                prev_out=prev_out,
-                decoder_pos_embed=decoder_pos_embed,
-                encoder_pos_embed=encoder_pos_embed,
-                prev_pos_embed=prev_pos_embed,
+                x, encoder_out, decoder_pos_embed=decoder_pos_embed, encoder_pos_embed=encoder_pos_embed
             )
         if self.norm is not None:
             x = self.norm(x)
         return x
 
 
-class ACTDualDecoderLayer(nn.Module):
-    def __init__(self, config: ACTHierDualReverseAdapConfig):
+class ACTDecoderLayer(nn.Module):
+    def __init__(self, config: ACTHierReverseConfig):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
-        self.cross_attn_encoder = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
-        self.cross_attn_prev = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
+        self.multihead_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
 
-        self.linear_mid1 = nn.Linear(config.dim_model, config.dim_feedforward)
-        self.linear_mid2 = nn.Linear(config.dim_feedforward, config.dim_model)
-        self.linear_final1 = nn.Linear(config.dim_model, config.dim_feedforward)
-        self.linear_final2 = nn.Linear(config.dim_feedforward, config.dim_model)
-
-        self.dropout_self = nn.Dropout(config.dropout)
-        self.dropout_cross1 = nn.Dropout(config.dropout)
-        self.dropout_mid = nn.Dropout(config.dropout)
-        self.dropout_cross2 = nn.Dropout(config.dropout)
-        self.dropout_final = nn.Dropout(config.dropout)
+        self.linear1 = nn.Linear(config.dim_model, config.dim_feedforward)
+        self.dropout = nn.Dropout(config.dropout)
+        self.linear2 = nn.Linear(config.dim_feedforward, config.dim_model)
 
         self.norm1 = nn.LayerNorm(config.dim_model)
         self.norm2 = nn.LayerNorm(config.dim_model)
-        self.norm_mid = nn.LayerNorm(config.dim_model)
         self.norm3 = nn.LayerNorm(config.dim_model)
-        self.norm4 = nn.LayerNorm(config.dim_model)
+        self.dropout1 = nn.Dropout(config.dropout)
+        self.dropout2 = nn.Dropout(config.dropout)
+        self.dropout3 = nn.Dropout(config.dropout)
 
         self.activation = get_activation_fn(config.feedforward_activation)
         self.pre_norm = config.pre_norm
@@ -519,64 +476,37 @@ class ACTDualDecoderLayer(nn.Module):
         self,
         x: Tensor,
         encoder_out: Tensor,
-        prev_out: Tensor | None = None,
         decoder_pos_embed: Tensor | None = None,
         encoder_pos_embed: Tensor | None = None,
-        prev_pos_embed: Tensor | None = None,
     ) -> Tensor:
         skip = x
         if self.pre_norm:
             x = self.norm1(x)
         q = k = self.maybe_add_pos_embed(x, decoder_pos_embed)
         x = self.self_attn(q, k, value=x)[0]
-        x = skip + self.dropout_self(x)
-
+        x = skip + self.dropout1(x)
         if self.pre_norm:
             skip = x
             x = self.norm2(x)
         else:
             x = self.norm1(x)
             skip = x
-        x = self.cross_attn_encoder(
+        x = self.multihead_attn(
             query=self.maybe_add_pos_embed(x, decoder_pos_embed),
             key=self.maybe_add_pos_embed(encoder_out, encoder_pos_embed),
             value=encoder_out,
         )[0]
-        x = skip + self.dropout_cross1(x)
-
+        x = skip + self.dropout2(x)
         if self.pre_norm:
             skip = x
-            x = self.norm_mid(x)
+            x = self.norm3(x)
         else:
             x = self.norm2(x)
             skip = x
-        x = self.linear_mid2(self.dropout_mid(self.activation(self.linear_mid1(x))))
-        x = skip + self.dropout_mid(x)
-
-        if prev_out is not None:
-            if self.pre_norm:
-                skip = x
-                x = self.norm3(x)
-            else:
-                x = self.norm_mid(x)
-                skip = x
-            x = self.cross_attn_prev(
-                query=self.maybe_add_pos_embed(x, decoder_pos_embed),
-                key=self.maybe_add_pos_embed(prev_out, prev_pos_embed),
-                value=prev_out,
-            )[0]
-            x = skip + self.dropout_cross2(x)
-
-        if self.pre_norm:
-            skip = x
-            x = self.norm4(x)
-        else:
-            x = self.norm3(x)
-            skip = x
-        x = self.linear_final2(self.dropout_final(self.activation(self.linear_final1(x))))
-        x = skip + self.dropout_final(x)
+        x = self.linear2(self.dropout(self.activation(self.linear1(x))))
+        x = skip + self.dropout3(x)
         if not self.pre_norm:
-            x = self.norm4(x)
+            x = self.norm3(x)
         return x
 
 
@@ -603,16 +533,21 @@ class ACTSinusoidalPositionEmbedding2d(nn.Module):
         y_range = not_mask.cumsum(1, dtype=torch.float32)
         x_range = not_mask.cumsum(2, dtype=torch.float32)
 
-        dim_t = torch.arange(self.dimension, device=x.device, dtype=torch.float32)
-        dim_t = self._temperature ** (2 * torch.div(dim_t, 2, rounding_mode="floor") / self.dimension)
+        y_range = y_range / (y_range[:, -1:, :] + self._eps) * self._two_pi
+        x_range = x_range / (x_range[:, :, -1:] + self._eps) * self._two_pi
 
-        pos_x = x_range[:, :, :, None] / dim_t
-        pos_y = y_range[:, :, :, None] / dim_t
+        inverse_frequency = self._temperature ** (
+            2 * (torch.arange(self.dimension, dtype=torch.float32, device=x.device) // 2) / self.dimension
+        )
 
-        pos_x = torch.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4).flatten(3)
-        pos_y = torch.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4).flatten(3)
-        pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2)
-        return pos
+        x_range = x_range.unsqueeze(-1) / inverse_frequency
+        y_range = y_range.unsqueeze(-1) / inverse_frequency
+
+        pos_embed_x = torch.stack((x_range[..., 0::2].sin(), x_range[..., 1::2].cos()), dim=-1).flatten(3)
+        pos_embed_y = torch.stack((y_range[..., 0::2].sin(), y_range[..., 1::2].cos()), dim=-1).flatten(3)
+        pos_embed = torch.cat((pos_embed_y, pos_embed_x), dim=3).permute(0, 3, 1, 2)
+
+        return pos_embed
 
 
 def get_activation_fn(activation: str) -> Callable:
@@ -622,4 +557,4 @@ def get_activation_fn(activation: str) -> Callable:
         return F.gelu
     if activation == "glu":
         return F.glu
-    raise RuntimeError(f"activation should be relu/gelu/glu, not {activation}.")
+    raise ValueError(f"{activation} is not a supported activation function")
