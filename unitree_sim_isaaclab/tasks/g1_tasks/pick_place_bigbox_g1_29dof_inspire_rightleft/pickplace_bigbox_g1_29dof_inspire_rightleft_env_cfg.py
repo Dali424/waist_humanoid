@@ -58,34 +58,37 @@ SPAWN_SIZE_Z = 0.01
 # Toggle for visualizing the spawn range on the table.
 SHOW_SPAWN_AREA = False
 
-# Target (success) area visualization for left table area.
+# Target (success) area visualization for right-lower table area.
 # Offsets are relative to the table origin to better align with the yellow marker.
-LEFT_TARGET_CENTER_OFFSET_X = 0.45
-LEFT_TARGET_CENTER_OFFSET_Y = 0.05
-TARGET_HALF_SCALE = 0.5
-TARGET_HALF_X = 0.12 * TARGET_HALF_SCALE
-TARGET_HALF_Y = 0.12 * TARGET_HALF_SCALE
-TARGET_CENTER_X = TABLE_BASE_X + LEFT_TARGET_CENTER_OFFSET_X
-TARGET_CENTER_Y = TABLE_BASE_Y + LEFT_TARGET_CENTER_OFFSET_Y
-TARGET_MIN_X = TARGET_CENTER_X - TARGET_HALF_X
-TARGET_MAX_X = TARGET_CENTER_X + TARGET_HALF_X
-TARGET_MIN_Y = TARGET_CENTER_Y - TARGET_HALF_Y
-TARGET_MAX_Y = TARGET_CENTER_Y + TARGET_HALF_Y
-TARGET_MIN_Z = OBJ_BASE_Z - 0.05
-TARGET_MAX_Z = OBJ_BASE_Z + 0.05
-TARGET_YAW_DEG = 30.0
+TARGET_CENTER_OFFSET_X = 0.43
+TARGET_CENTER_OFFSET_Y = 0.09
+TARGET_CENTER_OFFSET_Z = -0.02
+TARGET_SIZE_SCALE = 0.1
+TARGET_SIZE_X = 1.9 * TARGET_SIZE_SCALE
+TARGET_SIZE_Y = 1.3 * TARGET_SIZE_SCALE
+TARGET_SIZE_Z = 1.44685 * TARGET_SIZE_SCALE
+TARGET_CENTER_X = TABLE_BASE_X + TARGET_CENTER_OFFSET_X
+TARGET_CENTER_Y = TABLE_BASE_Y + TARGET_CENTER_OFFSET_Y
+TARGET_CENTER_Z = OBJ_BASE_Z + TARGET_CENTER_OFFSET_Z
+TARGET_MIN_X = TARGET_CENTER_X - 0.5 * TARGET_SIZE_X
+TARGET_MAX_X = TARGET_CENTER_X + 0.5 * TARGET_SIZE_X
+TARGET_MIN_Y = TARGET_CENTER_Y - 0.5 * TARGET_SIZE_Y
+TARGET_MAX_Y = TARGET_CENTER_Y + 0.5 * TARGET_SIZE_Y
+TARGET_MIN_Z = TARGET_CENTER_Z - 0.5 * TARGET_SIZE_Z
+TARGET_MAX_Z = TARGET_CENTER_Z + 0.5 * TARGET_SIZE_Z
+TARGET_YAW_DEG = 33
 TARGET_YAW_RAD = math.radians(TARGET_YAW_DEG)
 TARGET_YAW_COS = math.cos(0.5 * TARGET_YAW_RAD)
 TARGET_YAW_SIN = math.sin(0.5 * TARGET_YAW_RAD)
 TARGET_CENTER = (
     TARGET_CENTER_X,
     TARGET_CENTER_Y,
-    0.5 * (TARGET_MIN_Z + TARGET_MAX_Z),
+    TARGET_CENTER_Z,
 )
 TARGET_SIZE = (
-    max(1e-3, TARGET_MAX_X - TARGET_MIN_X),
-    max(1e-3, TARGET_MAX_Y - TARGET_MIN_Y),
-    max(1e-3, TARGET_MAX_Z - TARGET_MIN_Z),
+    max(1e-3, TARGET_SIZE_X),
+    max(1e-3, TARGET_SIZE_Y),
+    max(1e-3, TARGET_SIZE_Z),
 )
 SHOW_TARGET_AREA = False
 
@@ -172,7 +175,11 @@ class ObjectTableSceneCfg(TableRedBlockSceneCfg):
                 size=TARGET_SIZE,
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
                 collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
-                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.6, 1.0), opacity=0.4),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(1.0, 0.0, 0.0),
+                    emissive_color=(1.0, 0.0, 0.0),
+                    opacity=7.0,
+                ),
             ),
         )
 

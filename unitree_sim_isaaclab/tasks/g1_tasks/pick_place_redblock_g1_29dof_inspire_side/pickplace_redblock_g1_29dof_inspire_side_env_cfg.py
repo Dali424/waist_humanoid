@@ -101,7 +101,7 @@ class ObjectTableSceneCfg(TableRedBlockSceneCfg):
                 size=TARGET_SIZE,
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
                 collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
-                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.6, 1.0), opacity=0.4),
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), emissive_color=(1.0, 0.0, 0.0), opacity=7.0)
             ),
         )
 

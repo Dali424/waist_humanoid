@@ -232,13 +232,10 @@ class ACT(nn.Module):
         waist_dec_out = self.waist_decoder(decoder_queries, encoder_out, encoder_pos_embed=encoder_pos, decoder_pos_embed=decoder_pos)
         waist_tokens = waist_dec_out # (S, B, D)
 
-        # [NOVELTY] Apply Adaptive Gating
-        # 1. Prepare inputs (B, S, D)
+
         waist_tokens_b = waist_tokens.transpose(0, 1)
         queries_b = decoder_queries.transpose(0, 1)
-        # 2. Gate waist tokens based on query relevance
         gated_waist = self.waist_gating(queries_b, waist_tokens_b) # (B, S, D)
-        # 3. Transpose back for decoder (S, B, D)
         gated_waist_tokens = gated_waist.transpose(0, 1)
 
         # Arm Decoder: Concat memory (Standard act_hier structure but with gated waist)

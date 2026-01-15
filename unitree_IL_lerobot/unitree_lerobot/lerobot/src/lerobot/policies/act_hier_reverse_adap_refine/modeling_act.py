@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Action Chunking Transformer Policy (arm/hand -> waist)."""
+"""Action Chunking Transformer Policy (arm/hand -> waist -> refined arm/hand)."""
 
 import math
 from collections import deque
@@ -28,20 +28,22 @@ from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.ops.misc import FrozenBatchNorm2d
 
 from lerobot.constants import ACTION, OBS_IMAGES
-from lerobot.policies.act_hier_reverse_adap.configuration_act import ACTHierReverseAdapConfig
+from lerobot.policies.act_hier_reverse_adap_refine.configuration_act import (
+    ACTHierReverseAdapRefineConfig,
+)
 from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.pretrained import PreTrainedPolicy
 
 
-class ACTHierReverseAdapPolicy(PreTrainedPolicy):
-    """Hierarchical ACT variant decoding arm/hand first, then waist."""
+class ACTHierReverseAdapRefinePolicy(PreTrainedPolicy):
+    """Hierarchical ACT variant decoding arm/hand first, then waist, then refining arm/hand."""
 
-    config_class = ACTHierReverseAdapConfig
-    name = "act_hier_reverse_adap"
+    config_class = ACTHierReverseAdapRefineConfig
+    name = "act_hier_reverse_adap_refine"
 
     def __init__(
         self,
-        config: ACTHierReverseAdapConfig,
+        config: ACTHierReverseAdapRefineConfig,
         dataset_stats: dict[str, dict[str, Tensor]] | None = None,
     ):
         super().__init__(config)
@@ -111,8 +113,9 @@ class ACTHierReverseAdapPolicy(PreTrainedPolicy):
             batch = dict(batch)
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
 
-        actions = self.model(batch)[0]
-        actions = self.unnormalize_outputs({ACTION: actions})[ACTION]
+        # 모델은 (final, coarse) 튜플을 반환하므로 첫 번째(Final)만 사용
+        (actions_final, _), _ = self.model(batch)
+        actions = self.unnormalize_outputs({ACTION: actions_final})[ACTION]
         return actions
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
@@ -122,21 +125,39 @@ class ACTHierReverseAdapPolicy(PreTrainedPolicy):
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
 
         batch = self.normalize_targets(batch)
-        actions_hat, (mu_hat, log_sigma_x2_hat) = self.model(batch)
+        
+        # 모델 실행: Final Action과 Coarse Action(초안) 모두 받음
+        (actions_final, actions_coarse), (mu_hat, log_sigma_x2_hat) = self.model(batch)
 
-        l1_loss = (
-            F.l1_loss(batch[ACTION], actions_hat, reduction="none") * ~batch["action_is_pad"].unsqueeze(-1)
+        # 1. Final Loss (Main)
+        l1_loss_final = (
+            F.l1_loss(batch[ACTION], actions_final, reduction="none") * ~batch["action_is_pad"].unsqueeze(-1)
         ).mean()
 
-        loss_dict = {"l1_loss": l1_loss.item()}
+        # 2. Coarse Loss (Auxiliary)
+        l1_loss_coarse = (
+            F.l1_loss(batch[ACTION], actions_coarse, reduction="none") * ~batch["action_is_pad"].unsqueeze(-1)
+        ).mean()
+
+        # Config에서 가중치 가져오기
+        aux_weight = self.config.aux_loss_weight
+        
+        # Total L1 Loss
+        total_l1_loss = l1_loss_final + (aux_weight * l1_loss_coarse)
+
+        loss_dict = {
+            "l1_loss": l1_loss_final.item(),
+            "l1_loss_coarse": l1_loss_coarse.item(),
+        }
+
         if self.config.use_vae:
             mean_kld = (
                 (-0.5 * (1 + log_sigma_x2_hat - mu_hat.pow(2) - (log_sigma_x2_hat).exp())).sum(-1).mean()
             )
             loss_dict["kld_loss"] = mean_kld.item()
-            loss = l1_loss + mean_kld * self.config.kl_weight
+            loss = total_l1_loss + mean_kld * self.config.kl_weight
         else:
-            loss = l1_loss
+            loss = total_l1_loss
 
         return loss, loss_dict
 
@@ -178,8 +199,8 @@ class ACTTemporalEnsembler:
         return action
 
 
-# Adaptive gating for conditioning the second-stage decoder.
-class ContextGating(nn.Module):
+# [New] Residual Gating: Additive instead of Multiplicative for better gradient flow
+class ResidualContextGating(nn.Module):
     def __init__(self, dim_model: int) -> None:
         super().__init__()
         self.gate_net = nn.Sequential(
@@ -188,17 +209,20 @@ class ContextGating(nn.Module):
             nn.Linear(dim_model, dim_model),
             nn.Sigmoid(),
         )
+        self.proj = nn.Linear(dim_model, dim_model)
 
     def forward(self, queries: Tensor, context: Tensor) -> Tensor:
+        # combined: [B, S, 2*D]
         combined = torch.cat([queries, context], dim=-1)
         alpha = self.gate_net(combined)
-        return alpha * context
+        # Residual connection: context + (alpha * projected_context)
+        return context + (alpha * self.proj(context))
 
 
 class ACT(nn.Module):
-    """Action Chunking Transformer with reversed decoding order (arm/hand -> waist)."""
+    """Action Chunking Transformer with Iterative Refinement (Arm -> Waist -> Refined Arm)."""
 
-    def __init__(self, config: ACTHierReverseAdapConfig):
+    def __init__(self, config: ACTHierReverseAdapRefineConfig):
         super().__init__()
         self.config = config
 
@@ -231,7 +255,10 @@ class ACT(nn.Module):
             self.backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
 
         self.encoder = ACTEncoder(config)
+        
+        # Arm Decoder (Shared for Stage 1 and Stage 4)
         self.arm_decoder = ACTDecoder(config)
+        # Waist Decoder (Stage 3)
         self.waist_decoder = ACTDecoder(config)
 
         if self.config.robot_state_feature:
@@ -261,11 +288,9 @@ class ACT(nn.Module):
         self.register_buffer(
             "decoder_in_template", torch.zeros(config.chunk_size, 1, config.dim_model), persistent=False
         )
-        self.register_buffer(
-            "decoder_in_template", torch.zeros(config.chunk_size, 1, config.dim_model), persistent=False
-        )
 
-        self.waist_gating = ContextGating(config.dim_model)
+        # Use Residual Gating for stable gradient flow
+        self.waist_gating = ResidualContextGating(config.dim_model)
 
         self.waist_head = nn.Linear(config.dim_model, self.config.waist_dim)
         self.arm_head = nn.Linear(config.dim_model, self.config.arm_dim)
@@ -284,8 +309,11 @@ class ACT(nn.Module):
             if isinstance(module, nn.Linear):
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
+        if isinstance(self.waist_gating.proj, nn.Linear):
+            nn.init.xavier_uniform_(self.waist_gating.proj.weight)
+            nn.init.zeros_(self.waist_gating.proj.bias)
 
-    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, tuple[Tensor, Tensor] | tuple[None, None]]:
+    def forward(self, batch: dict[str, Tensor]) -> tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor] | tuple[None, None]]:
         if self.config.use_vae and self.training:
             assert "action" in batch, (
                 "actions must be provided when using the variational objective in training mode."
@@ -296,6 +324,7 @@ class ACT(nn.Module):
         else:
             batch_size = batch["observation.environment_state"].shape[0]
 
+        # VAE Logic
         if self.config.use_vae and "action" in batch and self.training:
             cls_embed = einops.repeat(
                 self.vae_encoder_cls_embed.weight, "1 d -> b 1 d", b=batch_size
@@ -334,6 +363,7 @@ class ACT(nn.Module):
                 batch["observation.state"].device
             )
 
+        # Prepare Encoder Inputs
         encoder_in_tokens = [self.encoder_latent_input_proj(latent_sample)]
         encoder_in_pos_embed = list(self.encoder_1d_feature_pos_embed.weight.unsqueeze(1))
         if self.config.robot_state_feature:
@@ -360,21 +390,40 @@ class ACT(nn.Module):
         decoder_queries = self.decoder_in_template.expand(-1, batch_size, -1).type_as(encoder_in_pos_embed)
         decoder_pos = self.decoder_pos_embed.weight.unsqueeze(1)
 
-        # Stage 1: arm decoder (for token)
-        arm_1dec_out = self.arm_decoder(
+        # -----------------------------------------------------------
+        # [Stage 1] Arm Draft (Coarse)
+        # -----------------------------------------------------------
+        arm_dec_out_1 = self.arm_decoder(
             decoder_queries,
             encoder_out,
             encoder_pos_embed=encoder_in_pos_embed,
             decoder_pos_embed=decoder_pos,
         )
-        arm_tokens = arm_1dec_out # (S,B,D)
+        arm_tokens_draft = arm_dec_out_1 # (S,B,D)
+        
+        # Heads for Coarse Output (for Aux Loss)
+        arm_dec_out_1_b = arm_dec_out_1.transpose(0, 1)
+        arm_draft = self.arm_head(arm_dec_out_1_b)
+        hand_draft = self.hand_head(arm_dec_out_1_b)
 
+        # -----------------------------------------------------------
+        # [Stage 2] Gating (Arm Draft -> Waist Context)
+        # -----------------------------------------------------------
+        arm_tokens_b = arm_tokens_draft.transpose(0, 1) # (B, S, D)
+        queries_b = decoder_queries.transpose(0, 1)     # (B, S, D)
+        
+        # Residual Gating: Preserve Arm info while adapting for Waist
+        gated_arm_tokens_b = self.waist_gating(queries_b, arm_tokens_b)
+        gated_arm_tokens = gated_arm_tokens_b.transpose(0, 1) # (S, B, D)
 
-        # Stage 2: decode waist conditioned on arm/hand latents.
-        waist_memory = torch.cat([encoder_out, arm_tokens], dim=0)
+        # -----------------------------------------------------------
+        # [Stage 3] Waist Decoding
+        # -----------------------------------------------------------
+        waist_memory = torch.cat([encoder_out, gated_arm_tokens], dim=0)
         waist_memory_pos = torch.cat(
-            [encoder_in_pos_embed.expand(-1, arm_tokens.shape[1], -1), torch.zeros_like(arm_tokens)], dim=0
+            [encoder_in_pos_embed.expand(-1, gated_arm_tokens.shape[1], -1), torch.zeros_like(gated_arm_tokens)], dim=0
         )
+        
         waist_dec_out = self.waist_decoder(
             decoder_queries,
             waist_memory,
@@ -382,43 +431,58 @@ class ACT(nn.Module):
             decoder_pos_embed=decoder_pos,
         )
         waist_tokens = waist_dec_out # (S,B,D)
-
-        # Stage 3: decode arm with gating
-        waist_tokens_b = waist_tokens.transpose(0, 1)
-        queries_b = decoder_queries.transpose(0, 1)
-        gated_waist = self.waist_gating(queries_b, waist_tokens_b) # (B, S, D)
-        gated_waist_tokens = gated_waist.transpose(0, 1)
-
-        # Arm Decoder: Concat memory (Standard act_hier structure but with gated waist)
-        arm_memory = torch.cat([encoder_out, gated_waist_tokens], dim=0)
-        arm_memory_pos = torch.cat([encoder_in_pos_embed.expand(-1, waist_tokens.shape[1], -1), torch.zeros_like(waist_tokens)], dim=0)
         
-        arm_dec_out = self.arm_decoder(
-            decoder_queries, 
-            arm_memory, 
-            encoder_pos_embed=arm_memory_pos, 
-            decoder_pos_embed=decoder_pos
-            )
-        
-        waist = self.waist_head(waist_dec_out.transpose(0, 1))
-        arm_dec_out = arm_dec_out.transpose(0, 1)
-        arm = self.arm_head(arm_dec_out)
-        hand = self.hand_head(arm_dec_out)
+        waist_dec_out_b = waist_dec_out.transpose(0, 1)
+        waist = self.waist_head(waist_dec_out_b)
 
-
-        action_dim = self.config.action_feature.shape[0]
-        actions = torch.zeros(
-            arm_dec_out.shape[0], arm_dec_out.shape[1], action_dim, device=arm_dec_out.device, dtype=arm_dec_out.dtype
+        # -----------------------------------------------------------
+        # [Stage 4] Arm Refinement (Final)
+        # -----------------------------------------------------------
+        # Concatenate Encoder + Determined Waist Tokens
+        # This gives the arm a chance to adjust based on where the waist actually is.
+        arm_refine_memory = torch.cat([encoder_out, waist_tokens], dim=0)
+        arm_refine_memory_pos = torch.cat(
+            [encoder_in_pos_embed.expand(-1, waist_tokens.shape[1], -1), torch.zeros_like(waist_tokens)], dim=0
         )
-        actions[:, :, self.config.waist_indices] = waist
-        actions[:, :, self.config.arm_indices] = arm
-        actions[:, :, self.config.hand_indices] = hand
+        
+        # Re-use Arm Decoder (Weight Sharing)
+        arm_dec_out_2 = self.arm_decoder(
+            decoder_queries,
+            arm_refine_memory,
+            encoder_pos_embed=arm_refine_memory_pos,
+            decoder_pos_embed=decoder_pos
+        )
+        
+        arm_dec_out_2_b = arm_dec_out_2.transpose(0, 1)
+        arm_final = self.arm_head(arm_dec_out_2_b)
+        hand_final = self.hand_head(arm_dec_out_2_b)
 
-        return actions, (mu, log_sigma_x2)
+        # -----------------------------------------------------------
+        # Construct Actions
+        # -----------------------------------------------------------
+        action_dim = self.config.action_feature.shape[0]
+        
+        # 1. Final Actions (Refined Arm + Waist)
+        actions_final = torch.zeros(
+            batch_size, self.config.chunk_size, action_dim, device=arm_final.device, dtype=arm_final.dtype
+        )
+        actions_final[:, :, self.config.waist_indices] = waist
+        actions_final[:, :, self.config.arm_indices] = arm_final
+        actions_final[:, :, self.config.hand_indices] = hand_final
+
+        # 2. Coarse Actions (Draft Arm + Waist) - For Aux Loss
+        actions_coarse = torch.zeros(
+            batch_size, self.config.chunk_size, action_dim, device=arm_draft.device, dtype=arm_draft.dtype
+        )
+        actions_coarse[:, :, self.config.waist_indices] = waist # Share waist
+        actions_coarse[:, :, self.config.arm_indices] = arm_draft
+        actions_coarse[:, :, self.config.hand_indices] = hand_draft
+
+        return (actions_final, actions_coarse), (mu, log_sigma_x2)
 
 
 class ACTEncoder(nn.Module):
-    def __init__(self, config: ACTHierReverseAdapConfig, is_vae_encoder: bool = False):
+    def __init__(self, config: ACTHierReverseAdapRefineConfig, is_vae_encoder: bool = False):
         super().__init__()
         self.is_vae_encoder = is_vae_encoder
         num_layers = config.n_vae_encoder_layers if self.is_vae_encoder else config.n_encoder_layers
@@ -435,7 +499,7 @@ class ACTEncoder(nn.Module):
 
 
 class ACTEncoderLayer(nn.Module):
-    def __init__(self, config: ACTHierReverseAdapConfig):
+    def __init__(self, config: ACTHierReverseAdapRefineConfig):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
         self.linear1 = nn.Linear(config.dim_model, config.dim_feedforward)
@@ -471,7 +535,7 @@ class ACTEncoderLayer(nn.Module):
 
 
 class ACTDecoder(nn.Module):
-    def __init__(self, config: ACTHierReverseAdapConfig):
+    def __init__(self, config: ACTHierReverseAdapRefineConfig):
         super().__init__()
         self.layers = nn.ModuleList([ACTDecoderLayer(config) for _ in range(config.n_decoder_layers)])
         self.norm = nn.LayerNorm(config.dim_model)
@@ -493,7 +557,7 @@ class ACTDecoder(nn.Module):
 
 
 class ACTDecoderLayer(nn.Module):
-    def __init__(self, config: ACTHierReverseAdapConfig):
+    def __init__(self, config: ACTHierReverseAdapRefineConfig):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
         self.multihead_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
