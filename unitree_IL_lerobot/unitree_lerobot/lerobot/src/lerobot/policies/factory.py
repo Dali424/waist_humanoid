@@ -25,52 +25,24 @@ from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.envs.configs import EnvConfig
 from lerobot.envs.utils import env_to_policy_features
 from lerobot.policies.act.configuration_act import ACTConfig
-from lerobot.policies.act_bide_adap.configuration_act import ACTBideAdapConfig
+from lerobot.policies.act_hier_dual.configuration_act import ACTHierDualConfig
+from lerobot.policies.act_hier_dual_adap.configuration_act import ACTHierDualAdapConfig
+from lerobot.policies.act_hier_dual_reverse.configuration_act import ACTHierDualReverseConfig
 from lerobot.policies.act_hier.configuration_act import ACTHierConfig
 from lerobot.policies.act_hier_adap.configuration_act import ACTHierAdapConfig
 from lerobot.policies.act_hier_reverse.configuration_act import ACTHierReverseConfig
 from lerobot.policies.act_hier_reverse_adap.configuration_act import ACTHierReverseAdapConfig
 from lerobot.policies.act_hier3.configuration_act import ACTHier3Config
 from lerobot.policies.act_hier3_adap.configuration_act import ACTHier3AdapConfig
-from lerobot.policies.act_samdoo.configuration_act import ACTSamdooConfig
-from lerobot.policies.act_sandwich.configuration_act import ACTSandwichConfig
-from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
-from lerobot.policies.pi0.configuration_pi0 import PI0Config
-from lerobot.policies.pi0fast.configuration_pi0fast import PI0FASTConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
-from lerobot.policies.sac.configuration_sac import SACConfig
-from lerobot.policies.sac.reward_model.configuration_classifier import RewardClassifierConfig
-from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
-from lerobot.policies.tdmpc.configuration_tdmpc import TDMPCConfig
-from lerobot.policies.vqbet.configuration_vqbet import VQBeTConfig
 
 
 def get_policy_class(name: str) -> PreTrainedPolicy:
     """Get the policy's class and config class given a name (matching the policy class' `name` attribute)."""
-    if name == "tdmpc":
-        from lerobot.policies.tdmpc.modeling_tdmpc import TDMPCPolicy
-
-        return TDMPCPolicy
-    elif name == "diffusion":
-        from lerobot.policies.diffusion.modeling_diffusion import DiffusionPolicy
-
-        return DiffusionPolicy
-    elif name == "act":
+    if name == "act":
         from lerobot.policies.act.modeling_act import ACTPolicy
 
         return ACTPolicy
-    elif name == "act_bide_adap":
-        from lerobot.policies.act_bide_adap.modeling_act import ACTBideAdapPolicy
-
-        return ACTBideAdapPolicy
-    elif name == "ACT_samdoo":
-        from lerobot.policies.act_samdoo.modeling_act import ACTSamdooPolicy
-
-        return ACTSamdooPolicy
-    elif name == "act_sandwich":
-        from lerobot.policies.act_sandwich.modeling_act import ACTSandwichPolicy
-
-        return ACTSandwichPolicy
     elif name == "act_hier":
         from lerobot.policies.act_hier.modeling_act import ACTHierPolicy
 
@@ -87,6 +59,18 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.act_hier_reverse_adap.modeling_act import ACTHierReverseAdapPolicy
 
         return ACTHierReverseAdapPolicy
+    elif name == "act_hier_dual":
+        from lerobot.policies.act_hier_dual.modeling_act import ACTHierDualPolicy
+
+        return ACTHierDualPolicy
+    elif name == "act_hier_dual_adap":
+        from lerobot.policies.act_hier_dual_adap.modeling_act import ACTHierDualAdapPolicy
+
+        return ACTHierDualAdapPolicy
+    elif name == "act_hier_dual_reverse":
+        from lerobot.policies.act_hier_dual_reverse.modeling_act import ACTHierDualReversePolicy
+
+        return ACTHierDualReversePolicy
     elif name == "act_hier3":
         from lerobot.policies.act_hier3.modeling_act import ACTHier3Policy
 
@@ -95,47 +79,13 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.act_hier3_adap.modeling_act import ACTHier3AdapPolicy
 
         return ACTHier3AdapPolicy
-    elif name == "vqbet":
-        from lerobot.policies.vqbet.modeling_vqbet import VQBeTPolicy
-
-        return VQBeTPolicy
-    elif name == "pi0":
-        from lerobot.policies.pi0.modeling_pi0 import PI0Policy
-
-        return PI0Policy
-    elif name == "pi0fast":
-        from lerobot.policies.pi0fast.modeling_pi0fast import PI0FASTPolicy
-
-        return PI0FASTPolicy
-    elif name == "sac":
-        from lerobot.policies.sac.modeling_sac import SACPolicy
-
-        return SACPolicy
-    elif name == "reward_classifier":
-        from lerobot.policies.sac.reward_model.modeling_classifier import Classifier
-
-        return Classifier
-    elif name == "smolvla":
-        from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
-
-        return SmolVLAPolicy
     else:
         raise NotImplementedError(f"Policy with name {name} is not implemented.")
 
 
 def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
-    if policy_type == "tdmpc":
-        return TDMPCConfig(**kwargs)
-    elif policy_type == "diffusion":
-        return DiffusionConfig(**kwargs)
-    elif policy_type == "act":
+    if policy_type == "act":
         return ACTConfig(**kwargs)
-    elif policy_type == "act_bide_adap":
-        return ACTBideAdapConfig(**kwargs)
-    elif policy_type == "ACT_samdoo":
-        return ACTSamdooConfig(**kwargs)
-    elif policy_type == "act_sandwich":
-        return ACTSandwichConfig(**kwargs)
     elif policy_type == "act_hier":
         return ACTHierConfig(**kwargs)
     elif policy_type == "act_hier_adap":
@@ -144,22 +94,16 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return ACTHierReverseConfig(**kwargs)
     elif policy_type == "act_hier_reverse_adap":
         return ACTHierReverseAdapConfig(**kwargs)
+    elif policy_type == "act_hier_dual":
+        return ACTHierDualConfig(**kwargs)
+    elif policy_type == "act_hier_dual_adap":
+        return ACTHierDualAdapConfig(**kwargs)
+    elif policy_type == "act_hier_dual_reverse":
+        return ACTHierDualReverseConfig(**kwargs)
     elif policy_type == "act_hier3":
         return ACTHier3Config(**kwargs)
     elif policy_type == "act_hier3_adap":
         return ACTHier3AdapConfig(**kwargs)
-    elif policy_type == "vqbet":
-        return VQBeTConfig(**kwargs)
-    elif policy_type == "pi0":
-        return PI0Config(**kwargs)
-    elif policy_type == "pi0fast":
-        return PI0FASTConfig(**kwargs)
-    elif policy_type == "sac":
-        return SACConfig(**kwargs)
-    elif policy_type == "smolvla":
-        return SmolVLAConfig(**kwargs)
-    elif policy_type == "reward_classifier":
-        return RewardClassifierConfig(**kwargs)
     else:
         raise ValueError(f"Policy type '{policy_type}' is not available.")
 

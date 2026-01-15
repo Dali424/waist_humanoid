@@ -16,10 +16,10 @@
 from dataclasses import dataclass
 
 from lerobot.configs.policies import PreTrainedConfig
-from lerobot.policies.act_hier_adap.configuration_act import ACTHierAdapConfig
+from lerobot.policies.act_hier_dual.configuration_act import ACTHierDualConfig
 
 
-@PreTrainedConfig.register_subclass("act_bide_adap")
+@PreTrainedConfig.register_subclass("act_hier_dual_reverse")
 @dataclass
-class ACTBideAdapConfig(ACTHierAdapConfig):
-    """Bidirectional adaptive ACT policy."""
+class ACTHierDualReverseConfig(ACTHierDualConfig):
+    """Dual cross-attention ACT variant decoding arm/hand first, then waist."""

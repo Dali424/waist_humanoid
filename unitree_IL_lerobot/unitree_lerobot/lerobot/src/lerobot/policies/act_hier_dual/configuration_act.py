@@ -1,4 +1,6 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#!/usr/bin/env python
+
+# Copyright 2024 Tony Z. Zhao and The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +13,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from dataclasses import dataclass
 
-from .act.configuration_act import ACTConfig as ACTConfig
-from .act_samdoo.configuration_act import ACTSamdooConfig as ACTSamdooConfig
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.policies.act_hier.configuration_act import ACTHierConfig
+
+
+@PreTrainedConfig.register_subclass("act_hier_dual")
+@dataclass
+class ACTHierDualConfig(ACTHierConfig):
+    """Dual cross-attention hierarchical ACT policy configuration."""
