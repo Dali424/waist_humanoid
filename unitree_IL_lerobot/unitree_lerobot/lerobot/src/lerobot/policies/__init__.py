@@ -13,4 +13,3 @@
 # limitations under the License.
 
 from .act.configuration_act import ACTConfig as ACTConfig
-from .act_samdoo.configuration_act import ACTSamdooConfig as ACTSamdooConfig
